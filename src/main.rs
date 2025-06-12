@@ -32,5 +32,6 @@ async fn main() -> NailResult<()> {
 		commands::Commands::Sample(args) => commands::sample::execute(args).await,
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
 		commands::Commands::Shuffle(args) => commands::shuffle::execute(args).await,
+		commands::Commands::Count(args) => commands::count::execute(args).await,
 	}
 }

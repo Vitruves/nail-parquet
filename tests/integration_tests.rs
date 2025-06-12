@@ -165,12 +165,12 @@ mod stats_tests {
 mod correlations_tests {
     use super::*;
     #[test]
-    fn test_correlations_unimplemented_fails_gracefully() {
+    fn test_correlations_spearman_works() {
         let (_td, input, _, _, _) = setup();
         Command::cargo_bin("nail").unwrap()
-            .args(["correlations", "-i", input.to_str().unwrap(), "-t", "spearman"])
-            .assert().failure()
-            .stderr(predicate::str::contains("not yet implemented"));
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value", "-t", "spearman"])
+            .assert().success()
+            .stdout(predicate::str::contains("correlation"));
     }
 }
 
@@ -689,6 +689,416 @@ mod append_extended_tests {
     }
 }
 
+// --- Count Tests ---
+
+mod count_tests {
+    use super::*;
+    #[test]
+    fn test_count_basic() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["count", "-i", input.to_str().unwrap()])
+            .assert().success()
+            .stdout(predicate::str::is_match(r"^\d+\n?$").unwrap());
+    }
+
+    #[test]
+    fn test_count_verbose() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["count", "-i", input.to_str().unwrap(), "--verbose"])
+            .assert().success()
+            .stderr(predicate::str::contains("Reading data"))
+            .stderr(predicate::str::contains("Counted"));
+    }
+
+    #[test]
+    fn test_count_output_json() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("count.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["count", "-i", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        let content = std::fs::read_to_string(out).unwrap();
+        assert!(content.contains("row_count"));
+    }
+
+    #[test]
+    fn test_count_output_csv() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("count.csv");
+        Command::cargo_bin("nail").unwrap()
+            .args(["count", "-i", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "-f", "csv"])
+            .assert().success();
+        
+        let content = std::fs::read_to_string(out).unwrap();
+        assert!(content.contains("row_count"));
+    }
+}
+
+// --- Extended Correlation Tests ---
+
+mod correlations_extended_tests {
+    use super::*;
+    #[test]
+    fn test_correlations_spearman() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value", "-t", "spearman"])
+            .assert().success()
+            .stdout(predicate::str::contains("correlation"));
+    }
+
+    #[test]
+    fn test_correlations_kendall() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value", "-t", "kendall"])
+            .assert().success()
+            .stdout(predicate::str::contains("correlation"));
+    }
+
+    #[test]
+    fn test_correlations_matrix_format() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value", "--correlation-matrix"])
+            .assert().success()
+            .stdout(predicate::str::contains("variable"));
+    }
+
+    #[test]
+    fn test_correlations_all_numeric_columns() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value"])
+            .assert().success()
+            .stdout(predicate::str::contains("correlation"));
+    }
+
+    #[test]
+    fn test_correlations_insufficient_columns() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id"])
+            .assert().failure()
+            .stderr(predicate::str::contains("at least 2"));
+    }
+
+    #[test]
+    fn test_correlations_non_numeric_columns() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "name,category"])
+            .assert().failure()
+            .stderr(predicate::str::contains("numeric columns only").or(predicate::str::contains("Utf8")));
+    }
+}
+
+// --- Extended Fill Tests ---
+
+mod fill_extended_tests {
+    use super::*;
+    #[test]
+    fn test_fill_median() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", input.to_str().unwrap(), "--method", "median", "-c", "value"])
+            .assert().success()
+            .stdout(predicate::str::contains("350.0")); // Median of (100,300,400,500) is 350
+    }
+
+    #[test]
+    fn test_fill_forward() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", input.to_str().unwrap(), "--method", "forward"])
+            .assert().success();
+    }
+
+    #[test]
+    fn test_fill_backward() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", input.to_str().unwrap(), "--method", "backward"])
+            .assert().success();
+    }
+
+    #[test]
+    fn test_fill_mode() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", input.to_str().unwrap(), "--method", "mode", "-c", "category"])
+            .assert().success();
+    }
+}
+
+// --- Extended Sample Tests ---
+
+mod sample_extended_tests {
+    use super::*;
+    #[test]
+    fn test_sample_percentage() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["sample", "-i", input.to_str().unwrap(), "-n", "3", "--method", "random"])
+            .assert().success()
+            .stdout(predicate::str::contains("Alice").or(predicate::str::contains("Bob")));
+    }
+
+    #[test]
+    fn test_sample_stratified_verbose() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["sample", "-i", input.to_str().unwrap(), "-n", "2", "--method", "stratified", "--stratify-by", "category", "--verbose"])
+            .assert().success()
+            .stderr(predicate::str::contains("Sampling"));
+    }
+
+    #[test]
+    fn test_sample_output_to_file() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("sample.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["sample", "-i", input.to_str().unwrap(), "-n", "2", "-o", out.to_str().unwrap()])
+            .assert().success();
+        
+        assert!(out.exists());
+    }
+}
+
+// --- Extended ID Tests ---
+
+mod id_extended_tests {
+    use super::*;
+    #[test]
+    fn test_id_create_with_different_dataset() {
+        let (_td, _, input2, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["id", "-i", input2.to_str().unwrap(), "--create", "--id-col-name", "row_id"])
+            .assert().success()
+            .stdout(predicate::str::contains("row_id"));
+    }
+
+    #[test]
+    fn test_id_create_with_output() {
+        let (td, _, input2, _, _) = setup();
+        let out = td.path().join("with_id.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["id", "-i", input2.to_str().unwrap(), "--create", "--id-col-name", "row_id", "-o", out.to_str().unwrap()])
+            .assert().success();
+        
+        assert!(out.exists());
+    }
+}
+
+// --- Extended Schema Tests ---
+
+mod schema_extended_tests {
+    use super::*;
+    #[test]
+    fn test_schema_json_output() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("schema.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["schema", "-i", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        let content = std::fs::read_to_string(out).unwrap();
+        assert!(content.contains("name") && content.contains("data_type"));
+    }
+}
+
+// --- Extended Preview Tests ---
+
+mod preview_extended_tests {
+    use super::*;
+    #[test]
+    fn test_preview_large_sample() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["preview", "-i", input.to_str().unwrap(), "-n", "10"])
+            .assert().success()
+            .stdout(predicate::str::contains("Alice").or(predicate::str::contains("Bob")));
+    }
+
+    #[test]
+    fn test_preview_output_to_file() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("preview.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["preview", "-i", input.to_str().unwrap(), "-n", "3", "-o", out.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        assert!(out.exists());
+    }
+}
+
+// --- Extended Convert Tests ---
+
+mod convert_extended_tests {
+    use super::*;
+    #[test]
+    fn test_convert_excel_to_parquet() {
+        let (td, _, _, _, _) = setup();
+        let excel_path = std::path::Path::new("tests/fixtures/sample.xlsx");
+        if excel_path.exists() {
+            let out = td.path().join("from_excel.parquet");
+            Command::cargo_bin("nail").unwrap()
+                .args(["convert", "-i", excel_path.to_str().unwrap(), "-o", out.to_str().unwrap()])
+                .assert().success();
+            
+            assert!(out.exists());
+        }
+    }
+
+    #[test]
+    fn test_convert_large_file_verbose() {
+        let (td, input, _, _, _) = setup();
+        let out = td.path().join("converted.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["convert", "-i", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--verbose"])
+            .assert().success()
+            .stderr(predicate::str::contains("Converting"));
+    }
+}
+
+// --- Performance and Edge Case Tests ---
+
+mod performance_tests {
+    use super::*;
+    #[test]
+    fn test_large_dataset_operations() {
+        let (_td, input, _, _, _) = setup();
+        // Test that operations complete in reasonable time
+        Command::cargo_bin("nail").unwrap()
+            .args(["stats", "-i", input.to_str().unwrap(), "-t", "basic"])
+            .assert().success();
+    }
+
+    #[test]
+    fn test_parallel_jobs_setting() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["stats", "-i", input.to_str().unwrap(), "-j", "2"])
+            .assert().success();
+    }
+}
+
+// --- Complex Workflow Tests ---
+
+mod workflow_tests {
+    use super::*;
+    #[test]
+    fn test_data_cleaning_pipeline() {
+        let (td, input, _, _, _) = setup();
+        
+        // Step 1: Filter numeric only
+        let step1 = td.path().join("step1.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["filter", "-i", input.to_str().unwrap(), "-r", "numeric-only", "-o", step1.to_str().unwrap()])
+            .assert().success();
+        
+        // Step 2: Fill missing values
+        let step2 = td.path().join("step2.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", step1.to_str().unwrap(), "--method", "value", "--value", "0", "-o", step2.to_str().unwrap()])
+            .assert().success();
+        
+        // Step 3: Sample the result
+        let final_result = td.path().join("final.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["sample", "-i", step2.to_str().unwrap(), "-n", "2", "-o", final_result.to_str().unwrap()])
+            .assert().success();
+        
+        assert!(final_result.exists());
+    }
+
+    #[test]
+    fn test_analysis_pipeline() {
+        let (td, input, _, _, _) = setup();
+        
+        // Generate statistics
+        let stats_file = td.path().join("stats.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["stats", "-i", input.to_str().unwrap(), "-o", stats_file.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        // Generate correlations
+        let corr_file = td.path().join("correlations.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-c", "id,value", "-o", corr_file.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        assert!(stats_file.exists());
+        assert!(corr_file.exists());
+    }
+}
+
+// --- Format-specific Tests ---
+
+mod format_specific_tests {
+    use super::*;
+    #[test]
+    fn test_all_output_formats() {
+        let (td, input, _, _, _) = setup();
+        
+        // Test JSON output
+        let json_out = td.path().join("output.json");
+        Command::cargo_bin("nail").unwrap()
+            .args(["head", "-i", input.to_str().unwrap(), "-n", "2", "-o", json_out.to_str().unwrap(), "-f", "json"])
+            .assert().success();
+        
+        // Test CSV output
+        let csv_out = td.path().join("output.csv");
+        Command::cargo_bin("nail").unwrap()
+            .args(["head", "-i", input.to_str().unwrap(), "-n", "2", "-o", csv_out.to_str().unwrap(), "-f", "csv"])
+            .assert().success();
+        
+        // Test Parquet output
+        let parquet_out = td.path().join("output.parquet");
+        Command::cargo_bin("nail").unwrap()
+            .args(["head", "-i", input.to_str().unwrap(), "-n", "2", "-o", parquet_out.to_str().unwrap(), "-f", "parquet"])
+            .assert().success();
+        
+        assert!(json_out.exists());
+        assert!(csv_out.exists());
+        assert!(parquet_out.exists());
+    }
+}
+
+// --- Regex and Pattern Tests ---
+
+mod pattern_tests {
+    use super::*;
+    #[test]
+    fn test_complex_regex_patterns() {
+        let (_td, input, _, _, _) = setup();
+        
+        // Test complex regex in headers
+        Command::cargo_bin("nail").unwrap()
+            .args(["headers", "-i", input.to_str().unwrap(), "--filter", "^(id|name|value)$"])
+            .assert().success()
+            .stdout(predicate::str::contains("id"))
+            .stdout(predicate::str::contains("name"))
+            .stdout(predicate::str::contains("value"))
+            .stdout(predicate::str::contains("category").not());
+    }
+
+    #[test]
+    fn test_wildcard_patterns() {
+        let (_td, input, _, _, _) = setup();
+        
+        // Test wildcard patterns in select
+        Command::cargo_bin("nail").unwrap()
+            .args(["select", "-i", input.to_str().unwrap(), "-c", ".*e.*"])
+            .assert().success()
+            .stdout(predicate::str::contains("name"))
+            .stdout(predicate::str::contains("value"));
+    }
+}
+
 mod error_handling_tests {
     use super::*;
     #[test]
@@ -724,5 +1134,37 @@ mod error_handling_tests {
             .args(["fill", "-i", input.to_str().unwrap(), "--method", "value"])
             .assert().failure()
             .stderr(predicate::str::contains("value").or(predicate::str::contains("required")));
+    }
+
+    #[test]
+    fn test_invalid_correlation_type() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["correlations", "-i", input.to_str().unwrap(), "-t", "invalid"])
+            .assert().failure();
+    }
+
+    #[test]
+    fn test_invalid_stats_type() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["stats", "-i", input.to_str().unwrap(), "-t", "invalid"])
+            .assert().failure();
+    }
+
+    #[test]
+    fn test_invalid_sample_method() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["sample", "-i", input.to_str().unwrap(), "--method", "invalid"])
+            .assert().failure();
+    }
+
+    #[test]
+    fn test_invalid_fill_method() {
+        let (_td, input, _, _, _) = setup();
+        Command::cargo_bin("nail").unwrap()
+            .args(["fill", "-i", input.to_str().unwrap(), "--method", "invalid"])
+            .assert().failure();
     }
 }

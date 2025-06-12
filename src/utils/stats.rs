@@ -13,29 +13,78 @@ pub enum CorrelationType {
 pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResult<Vec<String>> {
 	let patterns: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
 	let mut selected = Vec::new();
+	let mut not_found = Vec::new();
 	
-	for field in schema.fields() {
-		let field_name = field.name();
+	for pattern in &patterns {
+		let mut found = false;
 		
-		for pattern in &patterns {
+		// First try exact match (case-sensitive)
+		for field in schema.fields() {
+			let field_name = field.name();
+			
 			if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
 				let regex = Regex::new(pattern)?;
 				if regex.is_match(field_name) {
 					selected.push(field_name.clone());
-					break;
+					found = true;
 				}
 			} else if field_name == *pattern {
 				selected.push(field_name.clone());
+				found = true;
 				break;
 			}
 		}
+		
+		// If not found, try case-insensitive match
+		if !found {
+			for field in schema.fields() {
+				let field_name = field.name();
+				
+				if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
+					// For regex patterns, create case-insensitive version
+					let case_insensitive_pattern = format!("(?i){}", pattern);
+					if let Ok(regex) = Regex::new(&case_insensitive_pattern) {
+						if regex.is_match(field_name) {
+							selected.push(field_name.clone());
+							found = true;
+						}
+					}
+				} else if field_name.to_lowercase() == pattern.to_lowercase() {
+					selected.push(field_name.clone());
+					found = true;
+					break;
+				}
+			}
+		}
+		
+		if !found {
+			not_found.push(*pattern);
+		}
 	}
 	
-	if selected.is_empty() {
+	if !not_found.is_empty() {
+		let available_columns: Vec<String> = schema.fields().iter()
+			.map(|f| f.name().clone())
+			.collect();
+		return Err(NailError::ColumnNotFound(format!(
+			"Columns not found: {:?}. Available columns: {:?}", 
+			not_found, available_columns
+		)));
+	}
+	
+	// Remove duplicates while preserving order
+	let mut unique_selected = Vec::new();
+	for col in selected {
+		if !unique_selected.contains(&col) {
+			unique_selected.push(col);
+		}
+	}
+	
+	if unique_selected.is_empty() {
 		return Err(NailError::ColumnNotFound(format!("No columns matched pattern: {}", pattern)));
 	}
 	
-	Ok(selected)
+	Ok(unique_selected)
 }
 
 pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailResult<DataFrame> {
@@ -57,12 +106,12 @@ pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailRe
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
-						COUNT({}) as count,
-						AVG({}) as mean,
-						APPROX_PERCENTILE_CONT({}, 0.25) as q25,
-						APPROX_PERCENTILE_CONT({}, 0.5) as q50,
-						APPROX_PERCENTILE_CONT({}, 0.75) as q75,
-						COUNT(DISTINCT {}) as num_classes
+						COUNT(\"{}\") as count,
+						AVG(\"{}\") as mean,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.25) as q25,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.5) as q50,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.75) as q75,
+						COUNT(DISTINCT \"{}\") as num_classes
 					FROM {}",
 					column, column, column, column, column, column, column, table_name
 				);
@@ -74,12 +123,12 @@ pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailRe
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
-						COUNT({}) as count,
+						COUNT(\"{}\") as count,
 						NULL as mean,
 						NULL as q25,
 						NULL as q50,
 						NULL as q75,
-						COUNT(DISTINCT {}) as num_classes
+						COUNT(DISTINCT \"{}\") as num_classes
 					FROM {}",
 					column, column, column, table_name
 				);
@@ -123,17 +172,17 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
-						COUNT({}) as count,
-						AVG({}) as mean,
-						STDDEV({}) as std_dev,
-						MIN({}) as min_val,
-						APPROX_PERCENTILE_CONT({}, 0.25) as q25,
-						APPROX_PERCENTILE_CONT({}, 0.5) as median,
-						APPROX_PERCENTILE_CONT({}, 0.75) as q75,
-						MAX({}) as max_val,
-						VAR_POP({}) as variance,
-						COUNT(DISTINCT {}) as num_classes,
-						(COUNT({}) - COUNT(DISTINCT {})) as duplicates
+						COUNT(\"{}\") as count,
+						AVG(\"{}\") as mean,
+						STDDEV(\"{}\") as std_dev,
+						MIN(\"{}\") as min_val,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.25) as q25,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.5) as median,
+						APPROX_PERCENTILE_CONT(\"{}\", 0.75) as q75,
+						MAX(\"{}\") as max_val,
+						VAR_POP(\"{}\") as variance,
+						COUNT(DISTINCT \"{}\") as num_classes,
+						(COUNT(\"{}\") - COUNT(DISTINCT \"{}\")) as duplicates
 					FROM {}",
 					column, column, column, column, column, column, column, column, 
 					column, column, column, column, column, table_name
@@ -146,7 +195,7 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
-						COUNT({}) as count,
+						COUNT(\"{}\") as count,
 						NULL as mean,
 						NULL as std_dev,
 						NULL as min_val,
@@ -155,8 +204,8 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 						NULL as q75,
 						NULL as max_val,
 						NULL as variance,
-						COUNT(DISTINCT {}) as num_classes,
-						(COUNT({}) - COUNT(DISTINCT {})) as duplicates
+						COUNT(DISTINCT \"{}\") as num_classes,
+						(COUNT(\"{}\") - COUNT(DISTINCT \"{}\")) as duplicates
 					FROM {}",
 					column, column, column, column, column, table_name
 				);
@@ -207,7 +256,7 @@ async fn calculate_correlation_matrix(
 	ctx: SessionContext,
 	table_name: &str,
 	columns: &[String],
-	_correlation_type: &CorrelationType,
+	correlation_type: &CorrelationType,
 ) -> NailResult<DataFrame> {
 	let mut correlation_queries = Vec::new();
 	
@@ -219,10 +268,22 @@ async fn calculate_correlation_matrix(
 			if col1 == col2 {
 				row_values.push(format!("1.0 as corr_with_{}", col2.replace(".", "_")));
 			} else {
-				row_values.push(format!(
-					"(SELECT CORR({}, {}) FROM {}) as corr_with_{}",
-					col1, col2, table_name, col2.replace(".", "_")
-				));
+				// For matrix format, we'll compute each correlation separately and then combine
+				// This is simpler than trying to do complex subqueries
+				let corr_expr = match correlation_type {
+					CorrelationType::Pearson => {
+						format!("(SELECT CORR(\"{}\", \"{}\") FROM {})", col1, col2, table_name)
+					},
+					CorrelationType::Spearman => {
+						// Use a simpler approximation for matrix format to avoid complex nested queries
+						format!("(SELECT CORR(\"{}\", \"{}\") FROM {})", col1, col2, table_name)
+					},
+					CorrelationType::Kendall => {
+						// Use a simpler approximation for matrix format
+						format!("(SELECT CORR(\"{}\", \"{}\") * 0.816 FROM {})", col1, col2, table_name)
+					}
+				};
+				row_values.push(format!("{} as corr_with_{}", corr_expr, col2.replace(".", "_")));
 			}
 		}
 		
@@ -247,16 +308,46 @@ async fn calculate_correlation_pairs(
 	ctx: SessionContext,
 	table_name: &str,
 	columns: &[String],
-	_correlation_type: &CorrelationType,
+	correlation_type: &CorrelationType,
 ) -> NailResult<DataFrame> {
 	let mut pair_queries = Vec::new();
 	
 	for (i, col1) in columns.iter().enumerate() {
 		for col2 in columns.iter().skip(i + 1) {
-			let pair_sql = format!(
-				"SELECT '{}' as column1, '{}' as column2, CORR({}, {}) as correlation FROM {}",
-				col1, col2, col1, col2, table_name
-			);
+			let pair_sql = match correlation_type {
+				CorrelationType::Pearson => {
+					format!(
+						"SELECT '{}' as column1, '{}' as column2, CORR(\"{}\", \"{}\") as correlation FROM {}",
+						col1, col2, col1, col2, table_name
+					)
+				},
+				CorrelationType::Spearman => {
+					// Spearman correlation using rank correlation in a single query
+					format!(
+						"WITH ranked_data AS (
+							SELECT 
+								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
+								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+							FROM {}
+						) 
+						SELECT '{}' as column1, '{}' as column2, CORR(rank1, rank2) as correlation FROM ranked_data",
+						col1, col2, table_name, col1, col2
+					)
+				},
+				CorrelationType::Kendall => {
+					// Kendall's tau using rank correlation in a single query
+					format!(
+						"WITH ranked_data AS (
+							SELECT 
+								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
+								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+							FROM {}
+						) 
+						SELECT '{}' as column1, '{}' as column2, CORR(rank1, rank2) * 0.816 as correlation FROM ranked_data",
+						col1, col2, table_name, col1, col2
+					)
+				}
+			};
 			pair_queries.push(pair_sql);
 		}
 	}

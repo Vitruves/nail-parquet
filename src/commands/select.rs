@@ -78,29 +78,78 @@ pub async fn execute(args: SelectArgs) -> NailResult<()> {
 pub fn select_columns_by_pattern(schema: datafusion::common::DFSchemaRef, pattern: &str) -> NailResult<Vec<String>> {
 	let patterns: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
 	let mut selected = Vec::new();
+	let mut not_found = Vec::new();
 	
-	for field in schema.fields() {
-		let field_name = field.name();
+	for pattern in &patterns {
+		let mut found = false;
 		
-		for pattern in &patterns {
+		// First try exact match (case-sensitive)
+		for field in schema.fields() {
+			let field_name = field.name();
+			
 			if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
 				let regex = Regex::new(pattern)?;
 				if regex.is_match(field_name) {
 					selected.push(field_name.clone());
-					break;
+					found = true;
 				}
 			} else if field_name == *pattern {
 				selected.push(field_name.clone());
+				found = true;
 				break;
 			}
 		}
+		
+		// If not found, try case-insensitive match
+		if !found {
+			for field in schema.fields() {
+				let field_name = field.name();
+				
+				if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
+					// For regex patterns, create case-insensitive version
+					let case_insensitive_pattern = format!("(?i){}", pattern);
+					if let Ok(regex) = Regex::new(&case_insensitive_pattern) {
+						if regex.is_match(field_name) {
+							selected.push(field_name.clone());
+							found = true;
+						}
+					}
+				} else if field_name.to_lowercase() == pattern.to_lowercase() {
+					selected.push(field_name.clone());
+					found = true;
+					break;
+				}
+			}
+		}
+		
+		if !found {
+			not_found.push(*pattern);
+		}
 	}
 	
-	if selected.is_empty() {
+	if !not_found.is_empty() {
+		let available_columns: Vec<String> = schema.fields().iter()
+			.map(|f| f.name().clone())
+			.collect();
+		return Err(NailError::ColumnNotFound(format!(
+			"Columns not found: {:?}. Available columns: {:?}", 
+			not_found, available_columns
+		)));
+	}
+	
+	// Remove duplicates while preserving order
+	let mut unique_selected = Vec::new();
+	for col in selected {
+		if !unique_selected.contains(&col) {
+			unique_selected.push(col);
+		}
+	}
+	
+	if unique_selected.is_empty() {
 		return Err(NailError::ColumnNotFound(format!("No columns matched pattern: {}", pattern)));
 	}
 	
-	Ok(selected)
+	Ok(unique_selected)
 }
 
 pub fn parse_row_specification(spec: &str) -> NailResult<Vec<usize>> {
@@ -150,17 +199,20 @@ async fn select_rows_by_indices(df: &DataFrame, indices: &[usize]) -> NailResult
 		.collect::<Vec<_>>()
 		.join(",");
 	
+	// Get the original column names and quote them to preserve case
+	let original_columns: Vec<String> = df.schema().fields().iter()
+		.map(|f| format!("\"{}\"", f.name()))
+		.collect();
+	
 	let sql = format!(
-		"SELECT * FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
-		table_name, indices_str
+		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
+		original_columns.join(", "),
+		original_columns.join(", "),
+		table_name, 
+		indices_str
 	);
 	
 	let result = ctx.sql(&sql).await?;
-	let final_result = result.select(
-		df.schema().fields().iter()
-			.map(|f| col(f.name()))
-			.collect()
-	)?;
 	
-	Ok(final_result)
+	Ok(result)
 }

@@ -1,5 +1,4 @@
 use clap::Args;
-use datafusion::prelude::*;
 use std::path::PathBuf;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -65,19 +64,26 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
 		.collect::<Vec<_>>()
 		.join(",");
 	
+	// Get the original column names and quote them to preserve case
+	let original_columns: Vec<String> = df.schema().fields().iter()
+		.map(|f| format!("\"{}\"", f.name()))
+		.collect();
+	
 	let sql = format!(
-		"SELECT * FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
-		table_name, indices_str
+		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
+		original_columns.join(", "),
+		original_columns.join(", "),
+		table_name, 
+		indices_str
 	);
 	
-	let result = ctx.sql(&sql).await?;
-	let filtered_df = result.select(
-		df.schema().fields().iter()
-			.map(|f| col(f.name()))
-			.collect()
-	)?;
+	if args.verbose {
+		eprintln!("Executing SQL: {}", sql);
+	}
 	
-	display_dataframe(&filtered_df, args.output.as_deref(), args.format.as_ref()).await?;
+	let result = ctx.sql(&sql).await?;
+	
+	display_dataframe(&result, args.output.as_deref(), args.format.as_ref()).await?;
 	
 	Ok(())
 }

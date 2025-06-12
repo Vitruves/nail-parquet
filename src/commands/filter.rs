@@ -76,11 +76,12 @@ async fn apply_column_filters(df: &DataFrame, conditions: &str) -> NailResult<Da
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
+	let schema = df.schema().clone().into();
 	let mut filter_conditions = Vec::new();
 	
 	for condition in conditions.split(',') {
 		let condition = condition.trim();
-		let filter_expr = parse_condition(condition)?;
+		let filter_expr = parse_condition_with_schema(condition, &schema).await?;
 		filter_conditions.push(filter_expr);
 	}
 	
@@ -92,13 +93,27 @@ async fn apply_column_filters(df: &DataFrame, conditions: &str) -> NailResult<Da
 	Ok(result)
 }
 
-fn parse_condition(condition: &str) -> NailResult<Expr> {
+async fn parse_condition_with_schema(condition: &str, schema: &datafusion::common::DFSchemaRef) -> NailResult<Expr> {
 	let operators = [">=", "<=", "!=", "=", ">", "<"];
 	
 	for op in &operators {
 		if let Some(pos) = condition.find(op) {
-			let column_name = condition[..pos].trim();
+			let column_name_input = condition[..pos].trim();
 			let value_str = condition[pos + op.len()..].trim();
+			
+			// Find the actual column name (case-insensitive matching)
+			let actual_column_name = schema.fields().iter()
+				.find(|f| f.name().to_lowercase() == column_name_input.to_lowercase())
+				.map(|f| f.name().clone())
+				.ok_or_else(|| {
+					let available_cols: Vec<String> = schema.fields().iter()
+						.map(|f| f.name().clone())
+						.collect();
+					NailError::ColumnNotFound(format!(
+						"Column '{}' not found. Available columns: {:?}", 
+						column_name_input, available_cols
+					))
+				})?;
 			
 			let value_expr = if let Ok(int_val) = value_str.parse::<i64>() {
 				lit(int_val)
@@ -108,7 +123,7 @@ fn parse_condition(condition: &str) -> NailResult<Expr> {
 				lit(value_str)
 			};
 			
-			let column_expr = col(column_name);
+			let column_expr = col(&actual_column_name);
 			
 			return Ok(match *op {
 				"=" => column_expr.eq(value_expr),

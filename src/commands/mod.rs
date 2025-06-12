@@ -17,6 +17,7 @@ pub mod schema;
 pub mod sample;
 pub mod convert;
 pub mod shuffle;
+pub mod count;
 
 #[derive(Subcommand)]
 pub enum Commands {
@@ -70,4 +71,7 @@ pub enum Commands {
 	
 	#[command(about = "Shuffle data")]
 	Shuffle(shuffle::ShuffleArgs),
+	
+	#[command(about = "Count rows")]
+	Count(count::CountArgs),
 }

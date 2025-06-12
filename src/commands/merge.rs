@@ -44,16 +44,6 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 	let left_df = read_data(&args.input).await?;
 	let right_df = read_data(&args.right).await?;
 	
-	let (left_key, right_key) = if let Some(mapping) = &args.key_mapping {
-		parse_key_mapping(mapping)?
-	} else if let Some(key) = &args.key {
-		(key.clone(), key.clone())
-	} else {
-		return Err(NailError::InvalidArgument(
-			"--key or --key-mapping required for merge".to_string()
-		));
-	};
-	
 	let join_type = if args.left_join {
 		JoinType::Left
 	} else if args.right_join {
@@ -62,11 +52,49 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 		JoinType::Inner
 	};
 	
+	let (left_key, right_key) = if let Some(key_mapping) = &args.key_mapping {
+		parse_key_mapping(key_mapping)?
+	} else if let Some(key) = &args.key {
+		// Handle case-insensitive key matching
+		let left_schema = left_df.schema();
+		let right_schema = right_df.schema();
+		
+		let actual_left_key = left_schema.fields().iter()
+			.find(|f| f.name().to_lowercase() == key.to_lowercase())
+			.map(|f| f.name().clone())
+			.ok_or_else(|| {
+				let available_cols: Vec<String> = left_schema.fields().iter()
+					.map(|f| f.name().clone())
+					.collect();
+				NailError::ColumnNotFound(format!(
+					"Join key '{}' not found in left table. Available columns: {:?}", 
+					key, available_cols
+				))
+			})?;
+			
+		let actual_right_key = right_schema.fields().iter()
+			.find(|f| f.name().to_lowercase() == key.to_lowercase())
+			.map(|f| f.name().clone())
+			.ok_or_else(|| {
+				let available_cols: Vec<String> = right_schema.fields().iter()
+					.map(|f| f.name().clone())
+					.collect();
+				NailError::ColumnNotFound(format!(
+					"Join key '{}' not found in right table. Available columns: {:?}", 
+					key, available_cols
+				))
+			})?;
+			
+		(actual_left_key, actual_right_key)
+	} else {
+		return Err(NailError::InvalidArgument("Either --key or --key-mapping must be specified".to_string()));
+	};
+	
 	if args.verbose {
-		eprintln!("Performing {:?} join on {}={}", join_type, left_key, right_key);
+		eprintln!("Performing {:?} join on left.{} = right.{}", join_type, left_key, right_key);
 	}
 	
-	let merged_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type).await?;
+	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type).await?;
 	
 	if let Some(output_path) = &args.output {
 		let file_format = match args.format {
@@ -75,9 +103,9 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
 			_ => None,
 		};
-		write_data(&merged_df, output_path, file_format.as_ref()).await?;
+		write_data(&result_df, output_path, file_format.as_ref()).await?;
 	} else {
-		display_dataframe(&merged_df, None, args.format.as_ref()).await?;
+		display_dataframe(&result_df, None, args.format.as_ref()).await?;
 	}
 	
 	Ok(())
@@ -86,11 +114,8 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 fn parse_key_mapping(mapping: &str) -> NailResult<(String, String)> {
 	let parts: Vec<&str> = mapping.split('=').collect();
 	if parts.len() != 2 {
-		return Err(NailError::InvalidArgument(
-			"Key mapping must be in format 'left_col=right_col'".to_string()
-		));
+		return Err(NailError::InvalidArgument("Key mapping must be in format 'left_col=right_col'".to_string()));
 	}
-	
 	Ok((parts[0].trim().to_string(), parts[1].trim().to_string()))
 }
 

@@ -40,9 +40,14 @@ colored = "2.1"
 indicatif = "0.17"
 itertools = "0.13"
 uuid = { version = "1.10", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Excel file support
 calamine = "0.26"
+
+[[bin]]
+name = "nail"
+path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = "3.10"

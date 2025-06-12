@@ -87,13 +87,15 @@ async fn drop_rows_by_indices(df: &DataFrame, indices: &[usize]) -> NailResult<D
 		.collect::<Vec<_>>()
 		.join(",");
 	
+	// Get the original column names and quote them to preserve case
+	let original_columns: Vec<String> = df.schema().fields().iter()
+		.map(|f| format!("\"{}\"", f.name()))
+		.collect();
+	
 	let sql = format!(
-		"SELECT {} FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn NOT IN ({})",
-		df.schema().fields().iter()
-			.map(|f| f.name())
-			.cloned()
-			.collect::<Vec<_>>()
-			.join(", "),
+		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn NOT IN ({})",
+		original_columns.join(", "),
+		original_columns.join(", "),
 		table_name, 
 		indices_str
 	);

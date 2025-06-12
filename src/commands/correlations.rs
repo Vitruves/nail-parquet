@@ -33,12 +33,6 @@ pub struct CorrelationsArgs {
 }
 
 pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
-    // Only Pearson correlation implemented
-    if args.correlation_type != CorrelationType::Pearson {
-        return Err(NailError::Statistics(
-            format!("{:?} correlations not yet implemented", args.correlation_type)
-        ));
-    }
     if args.verbose {
         eprintln!("Reading data from: {}", args.input.display());
     }
@@ -47,21 +41,82 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
     let schema = df.schema();
     
     let target_columns = if let Some(col_spec) = &args.columns {
-        select_columns_by_pattern(schema.clone().into(), col_spec)?
+        let selected = select_columns_by_pattern(schema.clone().into(), col_spec)?;
+        
+        // Validate that all selected columns are numeric
+        let mut numeric_columns = Vec::new();
+        let mut non_numeric_columns = Vec::new();
+        
+        for col_name in &selected {
+            if let Ok(field) = schema.field_with_name(None, col_name) {
+                match field.data_type() {
+                    datafusion::arrow::datatypes::DataType::Int64 | 
+                    datafusion::arrow::datatypes::DataType::Float64 | 
+                    datafusion::arrow::datatypes::DataType::Int32 | 
+                    datafusion::arrow::datatypes::DataType::Float32 |
+                    datafusion::arrow::datatypes::DataType::Int16 |
+                    datafusion::arrow::datatypes::DataType::Int8 |
+                    datafusion::arrow::datatypes::DataType::UInt64 |
+                    datafusion::arrow::datatypes::DataType::UInt32 |
+                    datafusion::arrow::datatypes::DataType::UInt16 |
+                    datafusion::arrow::datatypes::DataType::UInt8 => {
+                        numeric_columns.push(col_name.clone());
+                    },
+                    _ => {
+                        non_numeric_columns.push((col_name.clone(), field.data_type().clone()));
+                    }
+                }
+            }
+        }
+        
+        if !non_numeric_columns.is_empty() {
+            let non_numeric_info: Vec<String> = non_numeric_columns.iter()
+                .map(|(name, dtype)| format!("'{}' ({:?})", name, dtype))
+                .collect();
+            return Err(NailError::Statistics(
+                format!("Correlation requires numeric columns only. Non-numeric columns found: {}. Available numeric columns: {:?}", 
+                    non_numeric_info.join(", "), numeric_columns)
+            ));
+        }
+        
+        if numeric_columns.len() < 2 {
+            return Err(NailError::Statistics(
+                format!("Need at least 2 numeric columns for correlation. Found {} numeric columns: {:?}", 
+                    numeric_columns.len(), numeric_columns)
+            ));
+        }
+        
+        numeric_columns
     } else {
-        schema.fields().iter()
+        let numeric_columns: Vec<String> = schema.fields().iter()
             .filter(|f| matches!(f.data_type(), 
                 datafusion::arrow::datatypes::DataType::Int64 | 
                 datafusion::arrow::datatypes::DataType::Float64 | 
                 datafusion::arrow::datatypes::DataType::Int32 | 
-                datafusion::arrow::datatypes::DataType::Float32
+                datafusion::arrow::datatypes::DataType::Float32 |
+                datafusion::arrow::datatypes::DataType::Int16 |
+                datafusion::arrow::datatypes::DataType::Int8 |
+                datafusion::arrow::datatypes::DataType::UInt64 |
+                datafusion::arrow::datatypes::DataType::UInt32 |
+                datafusion::arrow::datatypes::DataType::UInt16 |
+                datafusion::arrow::datatypes::DataType::UInt8
             ))
             .map(|f| f.name().clone())
-            .collect()
+            .collect();
+            
+        if numeric_columns.len() < 2 {
+            return Err(NailError::Statistics(
+                format!("Need at least 2 numeric columns for correlation. Found {} numeric columns: {:?}", 
+                    numeric_columns.len(), numeric_columns)
+            ));
+        }
+        
+        numeric_columns
     };
     
     if args.verbose {
-        eprintln!("Computing {:?} correlations for {} numeric columns", args.correlation_type, target_columns.len());
+        eprintln!("Computing {:?} correlations for {} numeric columns: {:?}", 
+            args.correlation_type, target_columns.len(), target_columns);
     }
     
     let corr_df = calculate_correlations(

@@ -116,19 +116,22 @@ async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>) -> NailResul
 		.collect::<Vec<_>>()
 		.join(",");
 	
+	// Get the original column names and quote them to preserve case
+	let original_columns: Vec<String> = df.schema().fields().iter()
+		.map(|f| format!("\"{}\"", f.name()))
+		.collect();
+	
 	let sql = format!(
-		"SELECT * FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
-		table_name, indices_str
+		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
+		original_columns.join(", "),
+		original_columns.join(", "),
+		table_name, 
+		indices_str
 	);
 	
 	let result = ctx.sql(&sql).await?;
-	let final_result = result.select(
-		df.schema().fields().iter()
-			.map(|f| col(f.name()))
-			.collect()
-	)?;
 	
-	Ok(final_result)
+	Ok(result)
 }
 
 async fn sample_stratified(
@@ -142,16 +145,31 @@ async fn sample_stratified(
     let table_name = "temp_table";
     ctx.register_table(table_name, df.clone().into_view())?;
 
+    // Find the actual column name (case-insensitive matching)
+    let schema = df.schema();
+    let actual_col_name = schema.fields().iter()
+        .find(|f| f.name().to_lowercase() == stratify_col.to_lowercase())
+        .map(|f| f.name().clone())
+        .ok_or_else(|| {
+            let available_cols: Vec<String> = schema.fields().iter()
+                .map(|f| f.name().clone())
+                .collect();
+            NailError::ColumnNotFound(format!(
+                "Column '{}' not found. Available columns: {:?}", 
+                stratify_col, available_cols
+            ))
+        })?;
+
     // First, let's try to get distinct values using SQL which is more robust
     let distinct_sql = format!(
         "SELECT DISTINCT {} FROM {} WHERE {} IS NOT NULL",
-        stratify_col, table_name, stratify_col
+        actual_col_name, table_name, actual_col_name
     );
     
     let distinct_df = match ctx.sql(&distinct_sql).await {
         Ok(df) => df,
-        Err(_) => {
-            return Err(NailError::Statistics(format!("Failed to retrieve categories from column '{}'", stratify_col)));
+        Err(e) => {
+            return Err(NailError::Statistics(format!("Failed to retrieve categories from column '{}': {}", actual_col_name, e)));
         }
     };
     
@@ -199,7 +217,7 @@ async fn sample_stratified(
                             }
                         },
                         _ => {
-                            return Err(NailError::Statistics(format!("Column '{}' must be of string type for stratified sampling", stratify_col)));
+                            return Err(NailError::Statistics(format!("Column '{}' must be of string type for stratified sampling", actual_col_name)));
                         }
                     }
                 }
@@ -218,7 +236,7 @@ async fn sample_stratified(
     for cat in &categories {
         // deterministic: take first per_group rows for each category
         let filtered = ctx.table(table_name).await?
-            .filter(col(stratify_col).eq(lit(cat)))?;
+            .filter(col(&actual_col_name).eq(lit(cat)))?;
         let limited = filtered.limit(0, Some(per_group))?;
         combined = Some(match combined {
             None => limited,
