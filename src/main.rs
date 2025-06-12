@@ -1,5 +1,12 @@
 use clap::Parser;
-use nail::{cli::Cli, commands, error::NailResult};
+
+mod cli;
+mod commands;
+mod error;
+mod utils;
+
+use cli::Cli;
+use error::NailResult;
 pub use crate::commands::select::{select_columns_by_pattern, parse_row_specification};
 
 
