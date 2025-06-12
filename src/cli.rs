@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nail")]
 #[command(about = "A fast parquet utility written in Rust")]
-#[command(version = "0.1.0")]
+#[command(version = "1.1.0")]
 pub struct Cli {
 	#[command(subcommand)]
 	pub command: crate::commands::Commands,
