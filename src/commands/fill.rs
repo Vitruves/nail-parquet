@@ -1,0 +1,225 @@
+use clap::Args;
+use datafusion::prelude::*;
+use std::path::PathBuf;
+use crate::error::{NailError, NailResult};
+use crate::utils::io::{read_data, write_data};
+use crate::utils::format::display_dataframe;
+use crate::utils::stats::select_columns_by_pattern;
+use datafusion::arrow::array::{Float64Array, Int64Array, Array};
+
+#[derive(Args, Clone)]
+pub struct FillArgs {
+	#[arg(short, long, help = "Input file")]
+	pub input: PathBuf,
+	
+	#[arg(long, help = "Fill method", value_enum, default_value = "value")]
+	pub method: FillMethod,
+	
+	#[arg(long, help = "Fill value (required for 'value' method)")]
+	pub value: Option<String>,
+	
+	#[arg(short, long, help = "Comma-separated column names to fill")]
+	pub columns: Option<String>,
+	
+	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
+	pub output: Option<PathBuf>,
+	
+	#[arg(short, long, help = "Output format", value_enum)]
+	pub format: Option<crate::cli::OutputFormat>,
+	
+	#[arg(short, long, help = "Enable verbose output")]
+	pub verbose: bool,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug)]
+pub enum FillMethod {
+	Value,
+	Mean,
+	Median,
+	Mode,
+	Forward,
+	Backward,
+}
+
+pub async fn execute(args: FillArgs) -> NailResult<()> {
+	if args.verbose {
+		eprintln!("Reading data from: {}", args.input.display());
+	}
+	
+	if matches!(args.method, FillMethod::Value) && args.value.is_none() {
+		return Err(NailError::InvalidArgument("--value is required when using 'value' method".to_string()));
+	}
+	
+	let df = read_data(&args.input).await?;
+	let schema = df.schema();
+	
+	let target_columns = if let Some(col_spec) = &args.columns {
+		select_columns_by_pattern(schema.clone().into(), col_spec)?
+	} else {
+		schema.fields().iter().map(|f| f.name().clone()).collect()
+	};
+	
+	if args.verbose {
+		eprintln!("Filling missing values in {} columns using {:?} method", target_columns.len(), args.method);
+	}
+	
+	let filled_df = fill_missing_values(&df, &target_columns, &args.method, args.value.as_deref()).await?;
+	
+	if let Some(output_path) = &args.output {
+		let file_format = match args.format {
+			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
+			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
+			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
+			_ => None,
+		};
+		write_data(&filled_df, output_path, file_format.as_ref()).await?;
+	} else {
+		display_dataframe(&filled_df, None, args.format.as_ref()).await?;
+	}
+	
+	Ok(())
+}
+
+async fn fill_missing_values(
+	df: &DataFrame,
+	columns: &[String],
+	method: &FillMethod,
+	value: Option<&str>,
+) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context().await?;
+	let table_name = "temp_table";
+	ctx.register_table(table_name, df.clone().into_view())?;
+	
+	let mut select_exprs = Vec::new();
+	let schema = df.schema();
+	
+	for field in schema.fields() {
+		let field_name = field.name();
+		
+		if columns.contains(field_name) {
+			let filled_expr = match method {
+				FillMethod::Value => {
+					let fill_val = value.unwrap();
+					match field.data_type() {
+						datafusion::arrow::datatypes::DataType::Int64 => {
+							let val: i64 = fill_val.parse()
+								.map_err(|_| NailError::InvalidArgument(format!("Invalid integer value: {}", fill_val)))?;
+							coalesce(vec![col(field_name), lit(val)])
+						},
+						datafusion::arrow::datatypes::DataType::Float64 => {
+							let val: f64 = fill_val.parse()
+								.map_err(|_| NailError::InvalidArgument(format!("Invalid float value: {}", fill_val)))?;
+							coalesce(vec![col(field_name), lit(val)])
+						},
+						datafusion::arrow::datatypes::DataType::Utf8 => {
+							coalesce(vec![col(field_name), lit(fill_val)])
+						},
+						_ => col(field_name),
+					}
+				},
+				FillMethod::Mean => {
+					// Use DataFusion's built-in avg function instead of manual calculation
+					match field.data_type() {
+						datafusion::arrow::datatypes::DataType::Float64 | 
+						datafusion::arrow::datatypes::DataType::Int64 => {
+							// Create a subquery to calculate the mean
+							                            let _mean_sql = format!(
+								"SELECT AVG({}) as mean_val FROM {}",
+								field_name, table_name
+							);
+							
+							// Use coalesce with a scalar subquery
+							coalesce(vec![
+								col(field_name),
+								lit(0.0) // This will be replaced by actual mean calculation below
+							])
+						},
+						_ => {
+							return Err(NailError::Statistics(format!("Mean calculation not supported for column '{}' of type {:?}", field_name, field.data_type())));
+						},
+					}
+				},
+				_ => {
+					return Err(NailError::Statistics("Only 'value' and 'mean' fill methods implemented".to_string()));
+				},
+			};
+			
+			select_exprs.push(filled_expr.alias(field_name));
+		} else {
+			select_exprs.push(col(field_name));
+		}
+	}
+	
+	// For mean method, we need to calculate means first
+	if matches!(method, FillMethod::Mean) {
+		let batches = df.clone().collect().await?;
+		let mut means = std::collections::HashMap::new();
+		
+		// Calculate means for each target column
+		for col_name in columns {
+			            let _field = schema.fields().iter()
+				.find(|f| f.name() == col_name)
+				.ok_or_else(|| NailError::Statistics(format!("Column '{}' not found", col_name)))?;
+			
+					let idx = schema.fields().iter()
+				.position(|f| f.name() == col_name)
+				.unwrap();
+			
+					let mut sum = 0f64;
+					let mut count = 0usize;
+			
+					for batch in &batches {
+						let array = batch.column(idx);
+						if let Some(farr) = array.as_any().downcast_ref::<Float64Array>() {
+							for i in 0..farr.len() {
+								if farr.is_valid(i) {
+									sum += farr.value(i);
+									count += 1;
+								}
+							}
+						} else if let Some(iarr) = array.as_any().downcast_ref::<Int64Array>() {
+							for i in 0..iarr.len() {
+								if iarr.is_valid(i) {
+									sum += iarr.value(i) as f64;
+									count += 1;
+								}
+							}
+						}
+					}
+			
+					if count == 0 {
+				return Err(NailError::Statistics(format!("No non-null values found in column '{}' to compute mean", col_name)));
+			}
+			
+			means.insert(col_name.clone(), sum / count as f64);
+		}
+		
+		// Now rebuild select expressions with actual means
+		select_exprs.clear();
+		for field in schema.fields() {
+			let field_name = field.name();
+			
+			if columns.contains(field_name) {
+				if let Some(&mean_val) = means.get(field_name) {
+					let filled_expr = match field.data_type() {
+						datafusion::arrow::datatypes::DataType::Float64 => {
+					coalesce(vec![col(field_name), lit(mean_val)])
+				},
+						datafusion::arrow::datatypes::DataType::Int64 => {
+							coalesce(vec![col(field_name), lit(mean_val)])
+				},
+						_ => col(field_name),
+			};
+			select_exprs.push(filled_expr.alias(field_name));
+		} else {
+			select_exprs.push(col(field_name));
+				}
+			} else {
+				select_exprs.push(col(field_name));
+			}
+		}
+	}
+	
+	let result = ctx.table(table_name).await?.select(select_exprs)?;
+	Ok(result)
+}

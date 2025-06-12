@@ -1,0 +1,6 @@
+id,name,value,date,flag,category
+1,sample_item_1,1.1,2025-06-11,False,A
+2,sample_item_2,2.2,2025-06-10,True,B
+3,sample_item_3,3.3,2025-06-09,False,C
+4,sample_item_4,4.4,2025-06-08,True,A
+5,sample_item_5,5.5,2025-06-07,False,B
