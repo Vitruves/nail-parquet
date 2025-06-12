@@ -39,6 +39,7 @@ All commands support these global flags:
 ### Data Inspection
 
 #### `nail head`
+
 Display the first N rows of a dataset.
 
 ```bash
@@ -56,10 +57,12 @@ nail head -i data.parquet -n 3 --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-n, --number N` - Number of rows to display (default: 5)
 
 #### `nail tail`
+
 Display the last N rows of a dataset.
 
 ```bash
@@ -74,10 +77,12 @@ nail tail -i data.parquet -n 10 -o tail_sample.csv -f csv
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-n, --number N` - Number of rows to display (default: 5)
 
 #### `nail preview`
+
 Randomly sample and display N rows from the dataset.
 
 ```bash
@@ -92,11 +97,13 @@ nail preview -i data.parquet -n 100 --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-n, --number N` - Number of rows to display (default: 5)
 - `-r, --random SEED` - Random seed for reproducible results
 
 #### `nail headers`
+
 List column names, optionally filtered by regex patterns.
 
 ```bash
@@ -114,10 +121,12 @@ nail headers -i data.parquet -f json
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-f, --filter REGEX` - Filter headers with regex pattern
 
 #### `nail schema`
+
 Display detailed schema information including column types and nullability.
 
 ```bash
@@ -132,11 +141,13 @@ nail schema -i data.parquet --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 
 ### Statistics & Analysis
 
 #### `nail stats`
+
 Compute statistical summaries for numeric and categorical columns.
 
 ```bash
@@ -157,16 +168,19 @@ nail stats -i data.parquet -t basic -o stats.json -f json
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-c, --columns PATTERN` - Comma-separated column names or regex patterns
 - `-t, --type TYPE` - Statistics type: `basic`, `exhaustive`, `hypothesis` (default: basic)
 
 **Statistics Types:**
+
 - **basic**: mean, Q25, Q50, Q75, number of unique values
 - **exhaustive**: count, mean, std dev, min, max, variance, duplicates
 - **hypothesis**: statistical significance tests (not yet implemented)
 
 #### `nail correlations`
+
 Compute correlation matrices and pairwise correlations between numeric columns.
 
 ```bash
@@ -187,6 +201,7 @@ nail correlations -i data.parquet --stats-tests --correlation-matrix
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-c, --columns PATTERN` - Comma-separated column names or regex patterns
 - `-t, --type TYPE` - Correlation type: `pearson`, `kendall`, `spearman` (default: pearson)
@@ -196,6 +211,7 @@ nail correlations -i data.parquet --stats-tests --correlation-matrix
 ### Data Manipulation
 
 #### `nail select`
+
 Select specific columns and/or rows from the dataset.
 
 ```bash
@@ -216,11 +232,13 @@ nail select -i data.parquet -c "id,name" -o subset.parquet
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-c, --columns PATTERN` - Column names or regex patterns (comma-separated)
 - `-r, --rows SPEC` - Row numbers or ranges (e.g., "1,3,5-10")
 
 #### `nail drop`
+
 Remove specific columns and/or rows from the dataset.
 
 ```bash
@@ -238,11 +256,13 @@ nail drop -i data.parquet -c "temp_col" -r "1-10"
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-c, --columns PATTERN` - Column names or regex patterns to drop
 - `-r, --rows SPEC` - Row numbers or ranges to drop
 
 #### `nail filter`
+
 Filter data based on column conditions or row characteristics.
 
 ```bash
@@ -266,11 +286,13 @@ nail filter -i data.parquet -r char-only
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-c, --columns CONDITIONS` - Column filter conditions (e.g., 'age>25,salary<50000')
 - `-r, --rows FILTER` - Row filter type: `no-nan`, `numeric-only`, `char-only`, `no-zeros`
 
 #### `nail fill`
+
 Fill missing values using various strategies.
 
 ```bash
@@ -288,6 +310,7 @@ nail fill -i data.parquet --method median -c "price,volume"
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `--method METHOD` - Fill method: `value`, `mean`, `median`, `mode`, `forward`, `backward` (default: value)
 - `--value VALUE` - Fill value (required for 'value' method)
@@ -296,6 +319,7 @@ nail fill -i data.parquet --method median -c "price,volume"
 ### Data Sampling & Transformation
 
 #### `nail sample`
+
 Sample data using various strategies.
 
 ```bash
@@ -316,6 +340,7 @@ nail sample -i data.parquet -n 100 --method last
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-n, --number N` - Number of samples (default: 10)
 - `--method METHOD` - Sampling method: `random`, `stratified`, `first`, `last` (default: random)
@@ -323,6 +348,7 @@ nail sample -i data.parquet -n 100 --method last
 - `-r, --random SEED` - Random seed for reproducible results
 
 #### `nail shuffle`
+
 Randomly shuffle the order of rows in the dataset.
 
 ```bash
@@ -337,10 +363,12 @@ nail shuffle -i data.parquet -o shuffled.parquet --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-r, --random SEED` - Random seed for reproducible results
 
 #### `nail id`
+
 Add ID columns to the dataset.
 
 ```bash
@@ -355,6 +383,7 @@ nail id -i data.parquet --create -o data_with_ids.parquet
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `--create` - Create new ID column
 - `--prefix PREFIX` - Prefix for ID values (default: "id")
@@ -363,6 +392,7 @@ nail id -i data.parquet --create -o data_with_ids.parquet
 ### Data Combination
 
 #### `nail merge`
+
 Join two datasets based on key columns.
 
 ```bash
@@ -383,6 +413,7 @@ nail merge -i left.parquet --right right.parquet --key id -o merged.parquet
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (left table, required)
 - `--right FILE` - Right table file to merge with (required)
 - `--key COLUMN` - Join key column name (required)
@@ -391,6 +422,7 @@ nail merge -i left.parquet --right right.parquet --key id -o merged.parquet
 - `--key-mapping MAPPING` - Key mapping for different column names (format: left_col=right_col)
 
 #### `nail append`
+
 Concatenate multiple datasets vertically.
 
 ```bash
@@ -405,6 +437,7 @@ nail append -i base.parquet --files "*.parquet" -o combined.parquet --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (base table, required)
 - `--files FILES` - Comma-separated list of files to append (required)
 - `--ignore-schema` - Ignore schema mismatches and force append
@@ -412,6 +445,7 @@ nail append -i base.parquet --files "*.parquet" -o combined.parquet --verbose
 ### Format Conversion
 
 #### `nail convert`
+
 Convert between different file formats.
 
 ```bash
@@ -429,19 +463,23 @@ nail convert -i large_dataset.csv -o large_dataset.parquet --verbose
 ```
 
 **Options:**
+
 - `-i, --input FILE` - Input file path (required)
 - `-o, --output FILE` - Output file path (required)
 
 **Supported Formats:**
+
 - **Input**: Parquet, CSV, JSON, Excel (read-only)
 - **Output**: Parquet, CSV, JSON
 
 ## Testing
 
 Run the full test suite (unit and integration tests):
+
 ```bash
 cargo test
 ```
+
 This will prepare sample fixtures under `tests/fixtures` and execute all integration tests defined in `tests/integration_tests.rs`.
 
 ## Examples
@@ -538,5 +576,5 @@ MIT License - see LICENSE file for details.
 ## Support
 
 For issues and questions:
-- GitHub Issues: https://github.com/yourusername/nail/issues
-- Documentation: https://github.com/yourusername/nail/wiki
+
+- GitHub Issues: https://github.com/Vitruves/nail-parquet/issues
