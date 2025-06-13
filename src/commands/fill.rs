@@ -1,11 +1,11 @@
 use clap::Args;
 use datafusion::prelude::*;
+use datafusion::arrow::array::{Float64Array, Int64Array, Array};
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::{read_data, write_data};
 use crate::utils::format::display_dataframe;
 use crate::utils::stats::select_columns_by_pattern;
-use datafusion::arrow::array::{Float64Array, Int64Array, Array};
 
 #[derive(Args, Clone)]
 pub struct FillArgs {
@@ -46,24 +46,20 @@ pub async fn execute(args: FillArgs) -> NailResult<()> {
 		eprintln!("Reading data from: {}", args.input.display());
 	}
 	
-	if matches!(args.method, FillMethod::Value) && args.value.is_none() {
-		return Err(NailError::InvalidArgument("--value is required when using 'value' method".to_string()));
-	}
-	
 	let df = read_data(&args.input).await?;
-	let schema = df.schema();
 	
-	let target_columns = if let Some(col_spec) = &args.columns {
+	let columns = if let Some(col_spec) = &args.columns {
+		let schema = df.schema();
 		select_columns_by_pattern(schema.clone().into(), col_spec)?
 	} else {
-		schema.fields().iter().map(|f| f.name().clone()).collect()
+		df.schema().fields().iter().map(|f| f.name().clone()).collect()
 	};
 	
 	if args.verbose {
-		eprintln!("Filling missing values in {} columns using {:?} method", target_columns.len(), args.method);
+		eprintln!("Filling missing values in {} columns using {:?} method", columns.len(), args.method);
 	}
 	
-	let filled_df = fill_missing_values(&df, &target_columns, &args.method, args.value.as_deref()).await?;
+	let result_df = fill_missing_values(&df, &columns, &args.method, args.value.as_deref()).await?;
 	
 	if let Some(output_path) = &args.output {
 		let file_format = match args.format {
@@ -72,9 +68,9 @@ pub async fn execute(args: FillArgs) -> NailResult<()> {
 			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
 			_ => None,
 		};
-		write_data(&filled_df, output_path, file_format.as_ref()).await?;
+		write_data(&result_df, output_path, file_format.as_ref()).await?;
 	} else {
-		display_dataframe(&filled_df, None, args.format.as_ref()).await?;
+		display_dataframe(&result_df, None, args.format.as_ref()).await?;
 	}
 	
 	Ok(())
@@ -90,8 +86,8 @@ async fn fill_missing_values(
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
-	let mut select_exprs = Vec::new();
 	let schema = df.schema();
+	let mut select_exprs = Vec::new();
 	
 	for field in schema.fields() {
 		let field_name = field.name();
@@ -104,17 +100,17 @@ async fn fill_missing_values(
 						datafusion::arrow::datatypes::DataType::Int64 => {
 							let val: i64 = fill_val.parse()
 								.map_err(|_| NailError::InvalidArgument(format!("Invalid integer value: {}", fill_val)))?;
-							coalesce(vec![col(field_name), lit(val)])
+							coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(val)])
 						},
 						datafusion::arrow::datatypes::DataType::Float64 => {
 							let val: f64 = fill_val.parse()
 								.map_err(|_| NailError::InvalidArgument(format!("Invalid float value: {}", fill_val)))?;
-							coalesce(vec![col(field_name), lit(val)])
+							coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(val)])
 						},
 						datafusion::arrow::datatypes::DataType::Utf8 => {
-							coalesce(vec![col(field_name), lit(fill_val)])
+							coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(fill_val)])
 						},
-						_ => col(field_name),
+						_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 					}
 				},
 				FillMethod::Mean => {
@@ -123,14 +119,14 @@ async fn fill_missing_values(
 						datafusion::arrow::datatypes::DataType::Float64 | 
 						datafusion::arrow::datatypes::DataType::Int64 => {
 							// Create a subquery to calculate the mean
-							                            let _mean_sql = format!(
+							let _mean_sql = format!(
 								"SELECT AVG({}) as mean_val FROM {}",
 								field_name, table_name
 							);
 							
 							// Use coalesce with a scalar subquery
 							coalesce(vec![
-								col(field_name),
+								Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 								lit(0.0) // This will be replaced by actual mean calculation below
 							])
 						},
@@ -144,7 +140,7 @@ async fn fill_missing_values(
 						datafusion::arrow::datatypes::DataType::Float64 | 
 						datafusion::arrow::datatypes::DataType::Int64 => {
 							coalesce(vec![
-								col(field_name),
+								Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 								lit(0.0) // This will be replaced by actual median calculation below
 							])
 						},
@@ -156,25 +152,25 @@ async fn fill_missing_values(
 				FillMethod::Mode => {
 					// Mode is the most frequent value
 					coalesce(vec![
-						col(field_name),
+						Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 						lit("") // This will be replaced by actual mode calculation below
 					])
 				},
 				FillMethod::Forward => {
 					// Forward fill - use LAG window function to get previous non-null value
 					// This is a simplified implementation
-					col(field_name)
+					Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 				},
 				FillMethod::Backward => {
 					// Backward fill - use LEAD window function to get next non-null value
 					// This is a simplified implementation
-					col(field_name)
+					Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 				},
 			};
 			
 			select_exprs.push(filled_expr.alias(field_name));
 		} else {
-			select_exprs.push(col(field_name));
+			select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, field_name)));
 		}
 	}
 	
@@ -187,41 +183,41 @@ async fn fill_missing_values(
 		
 		// Calculate statistical values for each target column
 		for col_name in columns {
-			            let _field = schema.fields().iter()
+			let _field = schema.fields().iter()
 				.find(|f| f.name() == col_name)
 				.ok_or_else(|| NailError::Statistics(format!("Column '{}' not found", col_name)))?;
 			
-					let idx = schema.fields().iter()
+			let idx = schema.fields().iter()
 				.position(|f| f.name() == col_name)
 				.unwrap();
 			
-					let mut values = Vec::<f64>::new();
-					let mut string_values = Vec::<String>::new();
+			let mut values = Vec::<f64>::new();
+			let mut string_values = Vec::<String>::new();
 			
-					for batch in &batches {
-						let array = batch.column(idx);
-						if let Some(farr) = array.as_any().downcast_ref::<Float64Array>() {
-							for i in 0..farr.len() {
-								if farr.is_valid(i) {
-									values.push(farr.value(i));
-								}
-							}
-						} else if let Some(iarr) = array.as_any().downcast_ref::<Int64Array>() {
-							for i in 0..iarr.len() {
-								if iarr.is_valid(i) {
-									values.push(iarr.value(i) as f64);
-								}
-							}
-						} else if let Some(sarr) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
-							for i in 0..sarr.len() {
-								if sarr.is_valid(i) {
-									string_values.push(sarr.value(i).to_string());
-								}
-							}
+			for batch in &batches {
+				let array = batch.column(idx);
+				if let Some(farr) = array.as_any().downcast_ref::<Float64Array>() {
+					for i in 0..farr.len() {
+						if farr.is_valid(i) {
+							values.push(farr.value(i));
 						}
 					}
+				} else if let Some(iarr) = array.as_any().downcast_ref::<Int64Array>() {
+					for i in 0..iarr.len() {
+						if iarr.is_valid(i) {
+							values.push(iarr.value(i) as f64);
+						}
+					}
+				} else if let Some(sarr) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
+					for i in 0..sarr.len() {
+						if sarr.is_valid(i) {
+							string_values.push(sarr.value(i).to_string());
+						}
+					}
+				}
+			}
 			
-					if values.is_empty() && string_values.is_empty() {
+			if values.is_empty() && string_values.is_empty() {
 				return Err(NailError::Statistics(format!("No non-null values found in column '{}'", col_name)));
 			}
 			
@@ -275,63 +271,63 @@ async fn fill_missing_values(
 						if let Some(&mean_val) = means.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Float64 => {
-									coalesce(vec![col(field_name), lit(mean_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mean_val)])
 								},
 								datafusion::arrow::datatypes::DataType::Int64 => {
-									coalesce(vec![col(field_name), lit(mean_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mean_val)])
 								},
-								_ => col(field_name),
+								_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 							}
 						} else {
-							col(field_name)
+							Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 						}
 					},
 					FillMethod::Median => {
 						if let Some(&median_val) = medians.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Float64 => {
-									coalesce(vec![col(field_name), lit(median_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(median_val)])
 								},
 								datafusion::arrow::datatypes::DataType::Int64 => {
-									coalesce(vec![col(field_name), lit(median_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(median_val)])
 								},
-								_ => col(field_name),
+								_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 							}
 						} else {
-							col(field_name)
+							Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 						}
 					},
 					FillMethod::Mode => {
 						if let Some(mode_val) = modes.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Utf8 => {
-									coalesce(vec![col(field_name), lit(mode_val.as_str())])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mode_val.as_str())])
 								},
 								datafusion::arrow::datatypes::DataType::Float64 => {
 									if let Ok(num_val) = mode_val.parse::<f64>() {
-										coalesce(vec![col(field_name), lit(num_val)])
+										coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(num_val)])
 									} else {
-										col(field_name)
+										Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 									}
 								},
 								datafusion::arrow::datatypes::DataType::Int64 => {
 									if let Ok(num_val) = mode_val.parse::<i64>() {
-										coalesce(vec![col(field_name), lit(num_val)])
+										coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(num_val)])
 									} else {
-										col(field_name)
+										Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 									}
 								},
-								_ => col(field_name),
+								_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 							}
 						} else {
-							col(field_name)
+							Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 						}
 					},
-					_ => col(field_name),
+					_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 				};
 				select_exprs.push(filled_expr.alias(field_name));
 			} else {
-				select_exprs.push(col(field_name));
+				select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, field_name)));
 			}
 		}
 	} else if matches!(method, FillMethod::Forward | FillMethod::Backward) {

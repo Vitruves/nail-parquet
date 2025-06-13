@@ -113,7 +113,7 @@ async fn align_schemas(df: &DataFrame, target_schema: &datafusion::common::DFSch
 		let target_name = target_field.name();
 		
 		if let Ok(_current_field) = current_schema.field_with_name(None, target_name) {
-			select_exprs.push(col(target_name));
+			select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, target_name)));
 		} else {
 			let null_expr = match target_field.data_type() {
 				datafusion::arrow::datatypes::DataType::Int64 => lit(0i64).alias(target_name),

@@ -44,7 +44,7 @@ pub async fn execute(args: SelectArgs) -> NailResult<()> {
 		}
 		
 		let select_exprs: Vec<Expr> = selected_columns.into_iter()
-			.map(|name| col(name))
+			.map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, &name)))
 			.collect();
 		
 		result_df = result_df.select(select_exprs)?;

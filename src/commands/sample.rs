@@ -236,7 +236,7 @@ async fn sample_stratified(
     for cat in &categories {
         // deterministic: take first per_group rows for each category
         let filtered = ctx.table(table_name).await?
-            .filter(col(&actual_col_name).eq(lit(cat)))?;
+            .filter(Expr::Column(datafusion::common::Column::new(None::<String>, &actual_col_name)).eq(lit(cat)))?;
         let limited = filtered.limit(0, Some(per_group))?;
         combined = Some(match combined {
             None => limited,

@@ -138,12 +138,12 @@ async fn perform_join(
 	let mut right_cols = Vec::new();
 	
 	for field in left_schema.fields() {
-		left_cols.push(format!("l.{}", field.name()));
+		left_cols.push(format!("l.\"{}\"", field.name()));
 	}
 	
 	for field in right_schema.fields() {
 		if field.name() != right_key {
-			right_cols.push(format!("r.{} as r_{}", field.name(), field.name()));
+			right_cols.push(format!("r.\"{}\" as \"r_{}\"", field.name(), field.name()));
 		}
 	}
 	
@@ -155,7 +155,7 @@ async fn perform_join(
 	};
 	
 	let sql = format!(
-		"SELECT {} FROM left_table l {} right_table r ON l.{} = r.{}",
+		"SELECT {} FROM left_table l {} right_table r ON l.\"{}\" = r.\"{}\"",
 		[left_cols, right_cols].concat().join(", "),
 		join_clause,
 		left_key,

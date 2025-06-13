@@ -80,11 +80,11 @@ async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str) -> NailResu
 	};
 	
 	let columns: Vec<String> = df.schema().fields().iter()
-		.map(|f| f.name().clone())
+		.map(|f| format!("\"{}\"", f.name()))
 		.collect();
 	
 	let sql = format!(
-		"SELECT {} as {}, {} FROM {}",
+		"SELECT {} as \"{}\", {} FROM {}",
 		id_col,
 		col_name,
 		columns.join(", "),

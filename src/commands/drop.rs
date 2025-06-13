@@ -45,7 +45,7 @@ pub async fn execute(args: DropArgs) -> NailResult<()> {
 		
 		let remaining_columns: Vec<Expr> = result_df.schema().fields().iter()
 			.filter(|f| !columns_to_drop.contains(f.name()))
-			.map(|f| col(f.name()))
+			.map(|f| Expr::Column(datafusion::common::Column::new(None::<String>, f.name())))
 			.collect();
 		
 		result_df = result_df.select(remaining_columns)?;
