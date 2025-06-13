@@ -123,7 +123,8 @@ async fn parse_condition_with_schema(condition: &str, schema: &datafusion::commo
 				lit(value_str)
 			};
 			
-			let column_expr = col(&actual_column_name);
+			// Use quoted column name to preserve case sensitivity
+			let column_expr = Expr::Column(datafusion::common::Column::new(None::<String>, &actual_column_name));
 			
 			return Ok(match *op {
 				"=" => column_expr.eq(value_expr),
@@ -149,7 +150,7 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter) -> NailResult<Data
 	let filter_expr = match filter {
 		RowFilter::NoNan => {
 			let conditions: Vec<Expr> = schema.fields().iter()
-				.map(|f| col(f.name()).is_not_null())
+				.map(|f| Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).is_not_null())
 				.collect();
 			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
 		},
@@ -168,7 +169,7 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter) -> NailResult<Data
 				return Err(NailError::InvalidArgument("No numeric columns found".to_string()));
 			}
 			
-			return Ok(df.clone().select(numeric_columns.iter().map(|name| col(name)).collect())?);
+			return Ok(df.clone().select(numeric_columns.iter().map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name))).collect())?);
 		},
 		RowFilter::CharOnly => {
 			let char_columns: Vec<String> = schema.fields().iter()
@@ -180,7 +181,7 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter) -> NailResult<Data
 				return Err(NailError::InvalidArgument("No string columns found".to_string()));
 			}
 			
-			return Ok(df.clone().select(char_columns.iter().map(|name| col(name)).collect())?);
+			return Ok(df.clone().select(char_columns.iter().map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name))).collect())?);
 		},
 		RowFilter::NoZeros => {
 			let conditions: Vec<Expr> = schema.fields().iter()
@@ -188,11 +189,11 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter) -> NailResult<Data
 					match f.data_type() {
 						datafusion::arrow::datatypes::DataType::Int64 | 
 						datafusion::arrow::datatypes::DataType::Int32 => {
-							Some(col(f.name()).not_eq(lit(0)))
+							Some(Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).not_eq(lit(0)))
 						},
 						datafusion::arrow::datatypes::DataType::Float64 | 
 						datafusion::arrow::datatypes::DataType::Float32 => {
-							Some(col(f.name()).not_eq(lit(0.0)))
+							Some(Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).not_eq(lit(0.0)))
 						},
 						_ => None,
 					}
