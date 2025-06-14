@@ -1985,7 +1985,7 @@ dependencies = [
 
 [[package]]
 name = "nail-parquet"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "anyhow",
  "arrow",
