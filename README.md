@@ -10,7 +10,8 @@ A high-performance command-line utility for working with Parquet files, built wi
 - **Fast operations** on large datasets using Apache Arrow and DataFusion
 - **Multiple file formats** supported: Parquet, CSV, JSON, Excel (read-only)
 - **Comprehensive data operations**: inspection, statistics, filtering, sampling, transformations
-- **Advanced features**: joins, unions, schema manipulation, missing value handling
+- **Data quality tools**: search, deduplication, size analysis, missing value handling
+- **Advanced features**: joins, unions, schema manipulation, stratified sampling
 - **Flexible output**: console display or file output in multiple formats
 - **Production-ready** with robust error handling and verbose logging
 
@@ -152,6 +153,73 @@ nail schema -i data.parquet --verbose
 **Options:**
 
 - `-i, --input FILE` - Input file path (required)
+
+#### `nail size`
+
+Analyze file and memory usage with detailed size breakdowns.
+
+```bash
+# Basic size analysis
+nail size -i data.parquet
+
+# Show per-column size breakdown
+nail size -i data.parquet --columns
+
+# Show per-row analysis
+nail size -i data.parquet --rows
+
+# Show all size metrics
+nail size -i data.parquet --columns --rows
+
+# Raw bits output (no human-friendly formatting)
+nail size -i data.parquet --bits
+
+# Save size analysis to file
+nail size -i data.parquet --columns --rows -o size_report.txt
+```
+
+**Options:**
+
+- `-i, --input FILE` - Input file path (required)
+- `-c, --columns` - Show per-column sizes
+- `-r, --rows` - Show per-row analysis
+- `--bits` - Show raw bits without human-friendly conversion
+
+#### `nail search`
+
+Search for specific values across columns with flexible matching options.
+
+```bash
+# Basic search across all columns
+nail search -i data.parquet --value "John"
+
+# Search in specific columns
+nail search -i data.parquet --value "error" -c "status,message,log"
+
+# Case-insensitive search
+nail search -i data.parquet --value "ACTIVE" --ignore-case
+
+# Exact match only (no partial matches)
+nail search -i data.parquet --value "complete" --exact
+
+# Return row numbers only
+nail search -i data.parquet --value "Bob" --rows
+
+# Search with multiple options
+nail search -i data.parquet --value "test" -c "name,description" --ignore-case --rows
+
+# Save search results
+nail search -i data.parquet --value "error" -o search_results.json -f json
+```
+
+**Options:**
+
+- `-i, --input FILE` - Input file path (required)
+- `--value VALUE` - Value to search for (required)
+- `-c, --columns PATTERN` - Comma-separated column names to search in
+- `-r, --rows` - Return matching row numbers only
+- `--ignore-case` - Case-insensitive search
+- `--exact` - Exact match only (no partial matches)
 
 ### Statistics & Analysis
 
@@ -324,6 +392,38 @@ nail fill -i data.parquet --method median -c "price,volume"
 - `--method METHOD` - Fill method: `value`, `mean`, `median`, `mode`, `forward`, `backward` (default: value)
 - `--value VALUE` - Fill value (required for 'value' method)
 - `-c, --columns PATTERN` - Comma-separated column names to fill
+
+#### `nail dedup`
+
+Remove duplicate rows or columns from the dataset.
+
+```bash
+# Remove duplicate rows (all columns considered)
+nail dedup -i data.parquet --row-wise
+
+# Remove duplicate rows based on specific columns
+nail dedup -i data.parquet --row-wise -c "id,email"
+
+# Keep last occurrence instead of first
+nail dedup -i data.parquet --row-wise --keep last
+
+# Remove duplicate columns (same name)
+nail dedup -i data.parquet --col-wise
+
+# Row-wise deduplication with verbose output
+nail dedup -i data.parquet --row-wise -c "user_id,timestamp" --verbose
+
+# Save deduplicated data
+nail dedup -i data.parquet --row-wise -o clean_data.parquet
+```
+
+**Options:**
+
+- `-i, --input FILE` - Input file path (required)
+- `--row-wise` - Remove duplicate rows (conflicts with --col-wise)
+- `--col-wise` - Remove duplicate columns (conflicts with --row-wise)
+- `-c, --columns PATTERN` - Columns to consider for row-wise deduplication
+- `--keep STRATEGY` - Keep 'first' or 'last' occurrence (default: first)
 
 ### Data Sampling & Transformation
 
@@ -498,6 +598,7 @@ This will prepare sample fixtures under `tests/fixtures` and execute all integra
 ```bash
 # Quick dataset overview
 nail schema -i sales_data.parquet
+nail size -i sales_data.parquet --columns --rows
 nail head -i sales_data.parquet -n 10
 nail stats -i sales_data.parquet -t basic
 
@@ -506,20 +607,45 @@ nail headers -i sales_data.parquet -f "price"
 nail correlations -i sales_data.parquet -c "price,quantity,discount"
 ```
 
+### Data Quality Investigation
+
+```bash
+# Search for problematic values
+nail search -i data.parquet --value "error" --ignore-case
+nail search -i data.parquet --value "null" -c "critical_fields" --rows
+
+# Find and remove duplicates
+nail dedup -i data.parquet --row-wise -c "id" --verbose -o unique_data.parquet
+
+# Analyze data size and memory usage
+nail size -i data.parquet --columns --bits
+
+# Check for specific patterns in text fields
+nail search -i data.parquet --value "@gmail.com" -c "email" --exact
+```
+
 ### Data Cleaning Pipeline
 
 ```bash
-# 1. Check for missing values and data quality
-nail filter -i raw_data.parquet -r no-nan -o clean_step1.parquet
+# 1. Analyze data size and structure
+nail size -i raw_data.parquet --columns --rows
+nail search -i raw_data.parquet --value "null" --ignore-case
 
-# 2. Remove unwanted columns
+# 2. Remove duplicates
+nail dedup -i raw_data.parquet --row-wise -c "id,timestamp" -o dedup_data.parquet
+
+# 3. Check for missing values and data quality
+nail filter -i dedup_data.parquet -r no-nan -o clean_step1.parquet
+
+# 4. Remove unwanted columns
 nail drop -i clean_step1.parquet -c "debug_,temp_" -o clean_step2.parquet
 
-# 3. Fill remaining missing values
+# 5. Fill remaining missing values
 nail fill -i clean_step2.parquet --method value --value 0 -c "price,quantity" -o clean_final.parquet
 
-# 4. Verify the result
+# 6. Verify the result
 nail stats -i clean_final.parquet -t exhaustive
+nail size -i clean_final.parquet --columns
 ```
 
 ### Sampling and Analysis
