@@ -23,6 +23,9 @@ pub struct DropArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -58,7 +61,7 @@ pub async fn execute(args: DropArgs) -> NailResult<()> {
 			eprintln!("Dropping {} rows", row_indices.len());
 		}
 		
-		result_df = drop_rows_by_indices(&result_df, &row_indices).await?;
+		result_df = drop_rows_by_indices(&result_df, &row_indices, args.jobs).await?;
 	}
 	
 	if let Some(output_path) = &args.output {
@@ -76,8 +79,8 @@ pub async fn execute(args: DropArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn drop_rows_by_indices(df: &DataFrame, indices: &[usize]) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn drop_rows_by_indices(df: &DataFrame, indices: &[usize], jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;

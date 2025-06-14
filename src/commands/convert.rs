@@ -12,6 +12,9 @@ pub struct ConvertArgs {
 	#[arg(short, long, help = "Output file")]
 	pub output: PathBuf,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }

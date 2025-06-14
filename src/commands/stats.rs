@@ -22,6 +22,9 @@ pub struct StatsArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }

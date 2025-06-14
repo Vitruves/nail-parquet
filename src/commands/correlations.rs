@@ -22,11 +22,17 @@ pub struct CorrelationsArgs {
 	#[arg(long, help = "Include statistical significance tests")]
 	pub stats_tests: bool,
 	
+	#[arg(long, help = "Number of decimal places for correlation values", default_value = "4")]
+	pub digits: usize,
+	
 	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
 	pub output: Option<PathBuf>,
 	
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
+	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
 	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
@@ -43,7 +49,6 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
     let target_columns = if let Some(col_spec) = &args.columns {
         let selected = select_columns_by_pattern(schema.clone().into(), col_spec)?;
         
-        // Validate that all selected columns are numeric
         let mut numeric_columns = Vec::new();
         let mut non_numeric_columns = Vec::new();
         
@@ -117,6 +122,7 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
     if args.verbose {
         eprintln!("Computing {:?} correlations for {} numeric columns: {:?}", 
             args.correlation_type, target_columns.len(), target_columns);
+        eprintln!("Using {} decimal places for correlation values", args.digits);
     }
     
     let corr_df = calculate_correlations(
@@ -124,7 +130,8 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
         &target_columns, 
         &args.correlation_type,
         args.correlation_matrix,
-        args.stats_tests
+        args.stats_tests,
+        args.digits
     ).await?;
     
     display_dataframe(&corr_df, args.output.as_deref(), args.format.as_ref()).await?;

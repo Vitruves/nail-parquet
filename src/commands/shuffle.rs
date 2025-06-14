@@ -19,6 +19,9 @@ pub struct ShuffleArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -35,7 +38,7 @@ pub async fn execute(args: ShuffleArgs) -> NailResult<()> {
 		eprintln!("Shuffling {} rows", total_rows);
 	}
 	
-	let shuffled_df = shuffle_dataframe(&df, args.random).await?;
+	let shuffled_df = shuffle_dataframe(&df, args.random, args.jobs).await?;
 	
 	if let Some(output_path) = &args.output {
 		let file_format = match args.format {
@@ -52,8 +55,8 @@ pub async fn execute(args: ShuffleArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn shuffle_dataframe(df: &DataFrame, _seed: Option<u64>) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn shuffle_dataframe(df: &DataFrame, _seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	ctx.register_table("temp_table", df.clone().into_view())?;
 
 	// Simple shuffling using ORDER BY RANDOM() 

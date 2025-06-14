@@ -18,7 +18,6 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 	for pattern in &patterns {
 		let mut found = false;
 		
-		// First try exact match (case-sensitive)
 		for field in schema.fields() {
 			let field_name = field.name();
 			
@@ -35,13 +34,11 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 			}
 		}
 		
-		// If not found, try case-insensitive match
 		if !found {
 			for field in schema.fields() {
 				let field_name = field.name();
 				
 				if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
-					// For regex patterns, create case-insensitive version
 					let case_insensitive_pattern = format!("(?i){}", pattern);
 					if let Ok(regex) = Regex::new(&case_insensitive_pattern) {
 						if regex.is_match(field_name) {
@@ -72,7 +69,6 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 		)));
 	}
 	
-	// Remove duplicates while preserving order
 	let mut unique_selected = Vec::new();
 	for col in selected {
 		if !unique_selected.contains(&col) {
@@ -240,15 +236,16 @@ pub async fn calculate_correlations(
 	correlation_type: &CorrelationType,
 	matrix_format: bool,
 	_include_tests: bool,
+	digits: usize,
 ) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context().await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
 	if matrix_format {
-		calculate_correlation_matrix(ctx, table_name, columns, correlation_type).await
+		calculate_correlation_matrix(ctx, table_name, columns, correlation_type, digits).await
 	} else {
-		calculate_correlation_pairs(ctx, table_name, columns, correlation_type).await
+		calculate_correlation_pairs(ctx, table_name, columns, correlation_type, digits).await
 	}
 }
 
@@ -257,6 +254,7 @@ async fn calculate_correlation_matrix(
 	table_name: &str,
 	columns: &[String],
 	correlation_type: &CorrelationType,
+	digits: usize,
 ) -> NailResult<DataFrame> {
 	let mut correlation_queries = Vec::new();
 	
@@ -268,19 +266,15 @@ async fn calculate_correlation_matrix(
 			if col1 == col2 {
 				row_values.push(format!("1.0 as corr_with_{}", col2.replace(".", "_")));
 			} else {
-				// For matrix format, we'll compute each correlation separately and then combine
-				// This is simpler than trying to do complex subqueries
 				let corr_expr = match correlation_type {
 					CorrelationType::Pearson => {
-						format!("(SELECT CORR(\"{}\", \"{}\") FROM {})", col1, col2, table_name)
+						format!("ROUND((SELECT CORR(\"{}\", \"{}\") FROM {}), {})", col1, col2, table_name, digits)
 					},
 					CorrelationType::Spearman => {
-						// Use a simpler approximation for matrix format to avoid complex nested queries
-						format!("(SELECT CORR(\"{}\", \"{}\") FROM {})", col1, col2, table_name)
+						format!("ROUND((SELECT CORR(\"{}\", \"{}\") FROM {}), {})", col1, col2, table_name, digits)
 					},
 					CorrelationType::Kendall => {
-						// Use a simpler approximation for matrix format
-						format!("(SELECT CORR(\"{}\", \"{}\") * 0.816 FROM {})", col1, col2, table_name)
+						format!("ROUND((SELECT CORR(\"{}\", \"{}\") * 0.816 FROM {}), {})", col1, col2, table_name, digits)
 					}
 				};
 				row_values.push(format!("{} as corr_with_{}", corr_expr, col2.replace(".", "_")));
@@ -309,6 +303,7 @@ async fn calculate_correlation_pairs(
 	table_name: &str,
 	columns: &[String],
 	correlation_type: &CorrelationType,
+	digits: usize,
 ) -> NailResult<DataFrame> {
 	let mut pair_queries = Vec::new();
 	
@@ -317,12 +312,11 @@ async fn calculate_correlation_pairs(
 			let pair_sql = match correlation_type {
 				CorrelationType::Pearson => {
 					format!(
-						"SELECT '{}' as column1, '{}' as column2, CORR(\"{}\", \"{}\") as correlation FROM {}",
-						col1, col2, col1, col2, table_name
+						"SELECT '{}' as column1, '{}' as column2, ROUND(CORR(\"{}\", \"{}\"), {}) as correlation FROM {}",
+						col1, col2, col1, col2, digits, table_name
 					)
 				},
 				CorrelationType::Spearman => {
-					// Spearman correlation using rank correlation in a single query
 					format!(
 						"WITH ranked_data AS (
 							SELECT 
@@ -330,12 +324,11 @@ async fn calculate_correlation_pairs(
 								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
 							FROM {}
 						) 
-						SELECT '{}' as column1, '{}' as column2, CORR(rank1, rank2) as correlation FROM ranked_data",
-						col1, col2, table_name, col1, col2
+						SELECT '{}' as column1, '{}' as column2, ROUND(CORR(rank1, rank2), {}) as correlation FROM ranked_data",
+						col1, col2, table_name, col1, col2, digits
 					)
 				},
 				CorrelationType::Kendall => {
-					// Kendall's tau using rank correlation in a single query
 					format!(
 						"WITH ranked_data AS (
 							SELECT 
@@ -343,8 +336,8 @@ async fn calculate_correlation_pairs(
 								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
 							FROM {}
 						) 
-						SELECT '{}' as column1, '{}' as column2, CORR(rank1, rank2) * 0.816 as correlation FROM ranked_data",
-						col1, col2, table_name, col1, col2
+						SELECT '{}' as column1, '{}' as column2, ROUND(CORR(rank1, rank2) * 0.816, {}) as correlation FROM ranked_data",
+						col1, col2, table_name, col1, col2, digits
 					)
 				}
 			};

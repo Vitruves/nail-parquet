@@ -24,6 +24,9 @@ pub struct PreviewArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -55,7 +58,7 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
 		eprintln!("Randomly sampling {} rows from {} total rows", args.number, total_rows);
 	}
 	
-	let ctx = crate::utils::create_context().await?;
+	let ctx = crate::utils::create_context_with_jobs(args.jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	

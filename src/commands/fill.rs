@@ -27,6 +27,9 @@ pub struct FillArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -59,7 +62,7 @@ pub async fn execute(args: FillArgs) -> NailResult<()> {
 		eprintln!("Filling missing values in {} columns using {:?} method", columns.len(), args.method);
 	}
 	
-	let result_df = fill_missing_values(&df, &columns, &args.method, args.value.as_deref()).await?;
+	let result_df = fill_missing_values(&df, &columns, &args.method, args.value.as_deref(), args.jobs).await?;
 	
 	if let Some(output_path) = &args.output {
 		let file_format = match args.format {
@@ -81,8 +84,9 @@ async fn fill_missing_values(
 	columns: &[String],
 	method: &FillMethod,
 	value: Option<&str>,
+	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	

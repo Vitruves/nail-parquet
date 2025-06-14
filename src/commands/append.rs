@@ -23,6 +23,9 @@ pub struct AppendArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -59,7 +62,7 @@ pub async fn execute(args: AppendArgs) -> NailResult<()> {
 		}
 		
 		let aligned_df = if args.ignore_schema {
-			align_schemas(&append_df, &base_schema).await?
+			align_schemas(&append_df, &base_schema, args.jobs).await?
 		} else {
 			append_df
 		};
@@ -101,8 +104,8 @@ fn schemas_compatible(schema1: &datafusion::common::DFSchemaRef, schema2: &dataf
 	true
 }
 
-async fn align_schemas(df: &DataFrame, target_schema: &datafusion::common::DFSchemaRef) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn align_schemas(df: &DataFrame, target_schema: &datafusion::common::DFSchemaRef, jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	

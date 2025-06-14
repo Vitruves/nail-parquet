@@ -31,6 +31,9 @@ pub struct MergeArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -94,7 +97,7 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 		eprintln!("Performing {:?} join on left.{} = right.{}", join_type, left_key, right_key);
 	}
 	
-	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type).await?;
+	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type, args.jobs).await?;
 	
 	if let Some(output_path) = &args.output {
 		let file_format = match args.format {
@@ -125,8 +128,9 @@ async fn perform_join(
 	left_key: &str,
 	right_key: &str,
 	join_type: JoinType,
+	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	
 	ctx.register_table("left_table", left_df.clone().into_view())?;
 	ctx.register_table("right_table", right_df.clone().into_view())?;

@@ -32,6 +32,9 @@ pub struct SampleArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -65,10 +68,10 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 	}
 	
 	let sampled_df = match args.method {
-		SampleMethod::Random => sample_random(&df, args.number, args.random).await?,
+		SampleMethod::Random => sample_random(&df, args.number, args.random, args.jobs).await?,
 		SampleMethod::Stratified => {
 			if let Some(col) = &args.stratify_by {
-				sample_stratified(&df, args.number, col, args.random).await?
+				sample_stratified(&df, args.number, col, args.random, args.jobs).await?
 			} else {
 				return Err(NailError::InvalidArgument("--stratify-by required for stratified sampling".to_string()));
 			}
@@ -95,7 +98,7 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>) -> NailResult<DataFrame> {
+async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
 	let total_rows = df.clone().count().await?;
 	let mut rng = match seed {
 		Some(s) => StdRng::seed_from_u64(s),
@@ -107,7 +110,7 @@ async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>) -> NailResul
 	indices.truncate(n);
 	indices.sort();
 	
-	let ctx = crate::utils::create_context().await?;
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
@@ -139,9 +142,10 @@ async fn sample_stratified(
     n: usize,
     stratify_col: &str,
     _seed: Option<u64>,
+    jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
     use std::collections::HashSet;
-    let ctx = crate::utils::create_context().await?;
+    let ctx = crate::utils::create_context_with_jobs(jobs).await?;
     let table_name = "temp_table";
     ctx.register_table(table_name, df.clone().into_view())?;
 
@@ -249,7 +253,7 @@ async fn sample_stratified(
     let remainder = n - per_group * categories.len();
     if remainder > 0 {
         // add random remainder from full dataset
-        let rem = sample_random(df, remainder, None).await?;
+        let rem = sample_random(df, remainder, None, None).await?;
         result_df = result_df.union(rem)?;
     }
     Ok(result_df)

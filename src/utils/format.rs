@@ -385,7 +385,8 @@ fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, w
 				let days_since_epoch = array.value(row_idx);
 				// Convert days since epoch to a readable date
 				let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
-					.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
+					.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+						.unwrap_or_else(|| chrono::NaiveDate::default()));
 				let val = date.format("%Y-%m-%d").to_string();
 				if with_color {
 					format!("{}{}{}", STRING_COLOR, val, RESET)
@@ -397,7 +398,10 @@ fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, w
 				let array = column.as_any().downcast_ref::<Date64Array>().unwrap();
 				let millis_since_epoch = array.value(row_idx);
 				let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
-					.unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+					.unwrap_or_else(|| {
+						chrono::DateTime::from_timestamp(0, 0)
+							.unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+					});
 				let val = datetime.format("%Y-%m-%d").to_string();
 				if with_color {
 					format!("{}{}{}", STRING_COLOR, val, RESET)
@@ -443,48 +447,88 @@ fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -
 	} else {
 		match data_type {
 			DataType::Utf8 => {
-				let array = column.as_any().downcast_ref::<StringArray>().unwrap();
-				format!("\"{}\"", array.value(row_idx).replace("\"", "\\\""))
+				if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
+					format!("\"{}\"", array.value(row_idx).replace("\"", "\\\""))
+				} else {
+					"\"unknown\"".to_string()
+				}
 			},
 			DataType::Int64 => {
-				let array = column.as_any().downcast_ref::<Int64Array>().unwrap();
-				array.value(row_idx).to_string()
+				if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					"0".to_string()
+				}
 			},
 			DataType::Float64 => {
-				let array = column.as_any().downcast_ref::<Float64Array>().unwrap();
-				array.value(row_idx).to_string()
+				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
+					let val = array.value(row_idx);
+					if val.is_finite() {
+						val.to_string()
+					} else {
+						"null".to_string()
+					}
+				} else {
+					"0.0".to_string()
+				}
 			},
 			DataType::Int32 => {
-				let array = column.as_any().downcast_ref::<Int32Array>().unwrap();
-				array.value(row_idx).to_string()
+				if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					"0".to_string()
+				}
 			},
 			DataType::Float32 => {
-				let array = column.as_any().downcast_ref::<Float32Array>().unwrap();
-				array.value(row_idx).to_string()
+				if let Some(array) = column.as_any().downcast_ref::<Float32Array>() {
+					let val = array.value(row_idx);
+					if val.is_finite() {
+						val.to_string()
+					} else {
+						"null".to_string()
+					}
+				} else {
+					"0.0".to_string()
+				}
 			},
 			DataType::Boolean => {
-				let array = column.as_any().downcast_ref::<BooleanArray>().unwrap();
-				array.value(row_idx).to_string()
+				if let Some(array) = column.as_any().downcast_ref::<BooleanArray>() {
+					array.value(row_idx).to_string()
+				} else {
+					"false".to_string()
+				}
 			},
 			DataType::Date32 => {
-				let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
-				let days_since_epoch = array.value(row_idx);
-				let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
-					.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap());
-				format!("\"{}\"", date.format("%Y-%m-%d"))
+				if let Some(array) = column.as_any().downcast_ref::<Date32Array>() {
+					let days_since_epoch = array.value(row_idx);
+					let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
+						.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+							.unwrap_or_else(|| chrono::NaiveDate::default()));
+					format!("\"{}\"", date.format("%Y-%m-%d"))
+				} else {
+					"\"1970-01-01\"".to_string()
+				}
 			},
 			DataType::Date64 => {
-				let array = column.as_any().downcast_ref::<Date64Array>().unwrap();
-				let millis_since_epoch = array.value(row_idx);
-				let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
-					.unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
-				format!("\"{}\"", datetime.format("%Y-%m-%d"))
+				if let Some(array) = column.as_any().downcast_ref::<Date64Array>() {
+					let millis_since_epoch = array.value(row_idx);
+					let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
+						.unwrap_or_else(|| {
+							chrono::DateTime::from_timestamp(0, 0)
+								.unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+						});
+					format!("\"{}\"", datetime.format("%Y-%m-%d"))
+				} else {
+					"\"1970-01-01\"".to_string()
+				}
 			},
 			DataType::Timestamp(_, _) => {
-				format!("\"timestamp\"")
+				"\"timestamp\"".to_string()
 			},
 			_ => {
-				let val = format!("{:?}", column.slice(row_idx, 1))
+				// Safe fallback for any other type
+				let debug_str = format!("{:?}", column.slice(row_idx, 1));
+				let val = debug_str
 					.lines()
 					.next()
 					.unwrap_or("unknown")

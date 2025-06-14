@@ -22,6 +22,9 @@ pub struct FilterArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -46,14 +49,14 @@ pub async fn execute(args: FilterArgs) -> NailResult<()> {
 		if args.verbose {
 			eprintln!("Applying column filters: {}", col_conditions);
 		}
-		result_df = apply_column_filters(&result_df, col_conditions).await?;
+		result_df = apply_column_filters(&result_df, col_conditions, args.jobs).await?;
 	}
 	
 	if let Some(row_filter) = &args.rows {
 		if args.verbose {
 			eprintln!("Applying row filter: {:?}", row_filter);
 		}
-		result_df = apply_row_filter(&result_df, row_filter).await?;
+		result_df = apply_row_filter(&result_df, row_filter, args.jobs).await?;
 	}
 	
 	if let Some(output_path) = &args.output {
@@ -71,8 +74,8 @@ pub async fn execute(args: FilterArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn apply_column_filters(df: &DataFrame, conditions: &str) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn apply_column_filters(df: &DataFrame, conditions: &str, jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
@@ -141,8 +144,8 @@ async fn parse_condition_with_schema(condition: &str, schema: &datafusion::commo
 	Err(NailError::InvalidArgument(format!("Invalid condition: {}", condition)))
 }
 
-async fn apply_row_filter(df: &DataFrame, filter: &RowFilter) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn apply_row_filter(df: &DataFrame, filter: &RowFilter, jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	

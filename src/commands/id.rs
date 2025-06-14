@@ -25,6 +25,9 @@ pub struct IdArgs {
 	#[arg(short, long, help = "Output format", value_enum)]
 	pub format: Option<crate::cli::OutputFormat>,
 	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
 }
@@ -40,7 +43,7 @@ pub async fn execute(args: IdArgs) -> NailResult<()> {
 		if args.verbose {
 			eprintln!("Creating ID column '{}' with prefix '{}'", args.id_col_name, args.prefix);
 		}
-		add_id_column(&df, &args.id_col_name, &args.prefix).await?
+		add_id_column(&df, &args.id_col_name, &args.prefix, args.jobs).await?
 	} else {
 		df
 	};
@@ -60,8 +63,8 @@ pub async fn execute(args: IdArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
+async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str, jobs: Option<usize>) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
