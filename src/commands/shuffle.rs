@@ -7,7 +7,7 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct ShuffleArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Random seed for reproducible results")]

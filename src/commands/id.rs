@@ -7,7 +7,7 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct IdArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Create new ID column")]

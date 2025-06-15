@@ -6,7 +6,7 @@ use crate::utils::io::{read_data, write_data};
 
 #[derive(Args, Clone)]
 pub struct SplitArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Split ratios (e.g., '0.7,0.2,0.1' or '70,20,10')")]

@@ -8,7 +8,7 @@ use crate::commands::select::{select_columns_by_pattern, parse_row_specification
 
 #[derive(Args, Clone)]
 pub struct DropArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Column names or regex patterns to drop (comma-separated)")]

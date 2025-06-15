@@ -34,5 +34,6 @@ async fn main() -> NailResult<()> {
 		commands::Commands::Append(args) => commands::append::execute(args).await,
 		commands::Commands::Split(args) => commands::split::execute(args).await,
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
+		commands::Commands::Update(args) => commands::update::execute(args).await,
 	}
 }

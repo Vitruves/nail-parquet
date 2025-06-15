@@ -7,7 +7,7 @@ use crate::utils::stats::{calculate_correlations, CorrelationType, select_column
 
 #[derive(Args, Clone)]
 pub struct CorrelationsArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Comma-separated column names or regex patterns")]

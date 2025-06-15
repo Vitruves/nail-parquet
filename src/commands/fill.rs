@@ -9,7 +9,7 @@ use crate::utils::stats::select_columns_by_pattern;
 
 #[derive(Args, Clone)]
 pub struct FillArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Fill method", value_enum, default_value = "value")]

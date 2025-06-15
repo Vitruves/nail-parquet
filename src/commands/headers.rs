@@ -6,7 +6,7 @@ use crate::utils::io::read_data;
 
 #[derive(Args, Clone)]
 pub struct HeadersArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Filter headers with regex pattern")]

@@ -7,7 +7,7 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct FilterArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Column filter conditions (e.g., 'age>25,salary<50000')")]

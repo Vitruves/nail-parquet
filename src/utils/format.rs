@@ -11,11 +11,25 @@ use crate::utils::FileFormat;
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
-const HEADER_COLOR: &str = "\x1b[1;36m"; // Bold cyan
-const NUMERIC_COLOR: &str = "\x1b[33m";  // Yellow
-const STRING_COLOR: &str = "\x1b[32m";   // Green
+
 const NULL_COLOR: &str = "\x1b[2;37m";   // Dim white
 const BORDER_COLOR: &str = "\x1b[2;90m"; // Dim gray
+
+// Bat-style field colors (cycling through different colors for variety)
+const FIELD_COLORS: &[&str] = &[
+	"\x1b[32m",   // Green
+	"\x1b[33m",   // Yellow
+	"\x1b[34m",   // Blue
+	"\x1b[35m",   // Magenta
+	"\x1b[36m",   // Cyan
+	"\x1b[91m",   // Bright red
+	"\x1b[92m",   // Bright green
+	"\x1b[93m",   // Bright yellow
+	"\x1b[94m",   // Bright blue
+	"\x1b[95m",   // Bright magenta
+	"\x1b[96m",   // Bright cyan
+	"\x1b[31m",   // Red
+];
 
 pub async fn display_dataframe(
 	df: &DataFrame,
@@ -104,26 +118,51 @@ async fn display_as_table(df: &DataFrame) -> NailResult<()> {
 		return Ok(());
 	}
 	
+	// Get terminal width for proper wrapping
+	let terminal_width = if let Some((w, _)) = term_size::dimensions() {
+		w.max(60).min(200)
+	} else {
+		120
+	};
+	
+	// Calculate available width for content (accounting for borders and field name)
+	let field_name_width = 20;
+	let border_width = 4; // "│ " + " : "
+	let content_width = terminal_width.saturating_sub(field_name_width + border_width + 2);
+	let header_width = terminal_width.saturating_sub(4); // Account for "┌─ " and " ─"
+	
 	// Print data in card format
 	let mut row_count = 0;
 	for batch in &batches {
 		for row_idx in 0..batch.num_rows() {
 			row_count += 1;
 			
-			// Card header
-			println!("{}┌─ Record {} ─{}", BORDER_COLOR, row_count, "─".repeat(60));
-			println!("│{}", RESET);
+			// Card header with dynamic width
+			let record_text = format!(" Record {} ", row_count);
+			let remaining_width = header_width.saturating_sub(record_text.len());
+			let left_dashes = remaining_width / 2;
+			let right_dashes = remaining_width - left_dashes;
+			
+			println!("{}┌{}{}{}{}",
+				BORDER_COLOR,
+				"─".repeat(left_dashes),
+				record_text,
+				"─".repeat(right_dashes),
+				RESET
+			);
+			println!("{}│{}", BORDER_COLOR, RESET);
 			
 			// Print each field as a key-value pair
 			for (col_idx, field) in schema.fields().iter().enumerate() {
 				let column = batch.column(col_idx);
-				let value = format_cell_value(column, row_idx, field.data_type(), true);
+				let field_color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+				let value = format_cell_value_with_field_color(column, row_idx, field.data_type(), field_color);
 				
-				// Format field name
-				let field_name = format!("{}{:<20}{}", HEADER_COLOR, field.name(), RESET);
+				// Format field name with the same color as the value
+				let field_name = format!("{}{}{:<width$}{}", BOLD, field_color, field.name(), RESET, width = field_name_width);
 				
-				// Handle long values by wrapping them
-				let wrapped_value = wrap_text(&value, 80, 22);
+				// Handle long values by wrapping them properly
+				let wrapped_value = wrap_text_with_color(&value, content_width, field_color);
 				let lines: Vec<&str> = wrapped_value.lines().collect();
 				
 				if lines.len() == 1 {
@@ -131,14 +170,14 @@ async fn display_as_table(df: &DataFrame) -> NailResult<()> {
 				} else {
 					println!("{}│{} {} : {}", BORDER_COLOR, RESET, field_name, lines[0]);
 					for line in &lines[1..] {
-						println!("{}│{} {:<20} : {}", BORDER_COLOR, RESET, "", line);
+						println!("{}│{} {:<width$} : {}", BORDER_COLOR, RESET, "", line, width = field_name_width);
 					}
 				}
 			}
 			
-			// Card footer
+			// Card footer with dynamic width
 			println!("{}│{}", BORDER_COLOR, RESET);
-			println!("{}└{}{}", BORDER_COLOR, "─".repeat(70), RESET);
+			println!("{}└{}{}", BORDER_COLOR, "─".repeat(terminal_width.saturating_sub(2)), RESET);
 			
 			// Add spacing between records
 			if row_count < batches.iter().map(|b| b.num_rows()).sum::<usize>() {
@@ -153,7 +192,7 @@ async fn display_as_table(df: &DataFrame) -> NailResult<()> {
 	Ok(())
 }
 
-fn wrap_text(text: &str, max_width: usize, _indent: usize) -> String {
+fn wrap_text_with_color(text: &str, max_width: usize, field_color: &str) -> String {
 	let clean_text = strip_ansi_codes(text);
 	
 	// First, normalize the text by replacing all newlines with spaces
@@ -164,12 +203,8 @@ fn wrap_text(text: &str, max_width: usize, _indent: usize) -> String {
 	let normalized_text = normalized_text.split_whitespace().collect::<Vec<_>>().join(" ");
 	
 	if normalized_text.len() <= max_width {
-		// If the original text had colors, preserve them for short text
-		if text.contains('\x1b') {
-			return text.replace('\n', " ").replace('\r', " ");
-		} else {
-			return normalized_text;
-		}
+		// For short text, return with proper color formatting
+		return format!("{}{}{}", field_color, normalized_text, RESET);
 	}
 	
 	let mut result = Vec::new();
@@ -191,32 +226,15 @@ fn wrap_text(text: &str, max_width: usize, _indent: usize) -> String {
 		result.push(current_line);
 	}
 	
-	// Reconstruct with original formatting for first line, plain for wrapped lines
-	if result.len() == 1 {
-		// For single line, preserve original colors but normalize whitespace
-		if text.contains('\x1b') {
-			text.replace('\n', " ").replace('\r', " ")
-		} else {
-			result[0].clone()
-		}
-	} else {
-		let mut output = Vec::new();
-		output.push(result[0].clone());
-		
-		for line in &result[1..] {
-			// For wrapped lines, apply the same color as the original if it had color
-			if text.contains('\x1b') {
-				// Extract color from original text
-				let color = extract_color_code(text);
-				output.push(format!("{}{}{}", color, line, RESET));
-			} else {
-				output.push(line.clone());
-			}
-		}
-		
-		output.join("\n")
-	}
+	// Apply color to all lines
+	let colored_lines: Vec<String> = result.iter()
+		.map(|line| format!("{}{}{}", field_color, line, RESET))
+		.collect();
+	
+	colored_lines.join("\n")
 }
+
+
 
 fn strip_ansi_codes(text: &str) -> String {
 	let mut result = String::new();
@@ -235,17 +253,7 @@ fn strip_ansi_codes(text: &str) -> String {
 	result
 }
 
-fn extract_color_code(text: &str) -> &str {
-	if text.contains(NUMERIC_COLOR) {
-		NUMERIC_COLOR
-	} else if text.contains(STRING_COLOR) {
-		STRING_COLOR
-	} else if text.contains(NULL_COLOR) {
-		NULL_COLOR
-	} else {
-		""
-	}
-}
+
 
 fn extract_numeric_from_debug(debug_str: &str) -> String {
 	// Try to extract numeric value from debug representation like "PrimitiveArray<Float64>\n[\n  4.5,\n]"
@@ -276,109 +284,54 @@ fn extract_numeric_from_debug(debug_str: &str) -> String {
 		.to_string()
 }
 
-fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, with_color: bool) -> String {
+fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_type: &DataType, _field_color: &str) -> String {
 	if column.is_null(row_idx) {
-		let value = "NULL";
-		if with_color {
-			format!("{}{}{}", NULL_COLOR, value, RESET)
-		} else {
-			value.to_string()
-		}
+		format!("{}{}{}", NULL_COLOR, "NULL", RESET)
 	} else {
 		let value = match data_type {
 			DataType::Utf8 => {
 				let array = column.as_any().downcast_ref::<StringArray>().unwrap();
-				let val = array.value(row_idx);
-				if with_color {
-					format!("{}{}{}", STRING_COLOR, val, RESET)
-				} else {
-					val.to_string()
-				}
+				array.value(row_idx).to_string()
 			},
 			DataType::Int64 => {
 				if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
-					let val = array.value(row_idx).to_string();
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					array.value(row_idx).to_string()
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));
-					let val = extract_numeric_from_debug(&debug_str);
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					extract_numeric_from_debug(&debug_str)
 				}
 			},
 			DataType::Float64 => {
 				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
-					let val = format!("{:.2}", array.value(row_idx));
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					format!("{:.2}", array.value(row_idx))
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));
-					let val = extract_numeric_from_debug(&debug_str);
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					extract_numeric_from_debug(&debug_str)
 				}
 			},
 			DataType::Int32 => {
 				if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
-					let val = array.value(row_idx).to_string();
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					array.value(row_idx).to_string()
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));
-					let val = extract_numeric_from_debug(&debug_str);
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					extract_numeric_from_debug(&debug_str)
 				}
 			},
 			DataType::Float32 => {
 				if let Some(array) = column.as_any().downcast_ref::<Float32Array>() {
-					let val = format!("{:.2}", array.value(row_idx));
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					format!("{:.2}", array.value(row_idx))
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));
-					let val = extract_numeric_from_debug(&debug_str);
-					if with_color {
-						format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-					} else {
-						val
-					}
+					extract_numeric_from_debug(&debug_str)
 				}
 			},
 			DataType::Boolean => {
 				let array = column.as_any().downcast_ref::<BooleanArray>().unwrap();
-				let val = array.value(row_idx).to_string();
-				if with_color {
-					format!("{}{}{}", NUMERIC_COLOR, val, RESET)
-				} else {
-					val
-				}
+				array.value(row_idx).to_string()
 			},
 			DataType::Date32 => {
 				let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
@@ -387,12 +340,7 @@ fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, w
 				let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
 					.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
 						.unwrap_or_else(|| chrono::NaiveDate::default()));
-				let val = date.format("%Y-%m-%d").to_string();
-				if with_color {
-					format!("{}{}{}", STRING_COLOR, val, RESET)
-				} else {
-					val
-				}
+				date.format("%Y-%m-%d").to_string()
 			},
 			DataType::Date64 => {
 				let array = column.as_any().downcast_ref::<Date64Array>().unwrap();
@@ -402,25 +350,15 @@ fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, w
 						chrono::DateTime::from_timestamp(0, 0)
 							.unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
 					});
-				let val = datetime.format("%Y-%m-%d").to_string();
-				if with_color {
-					format!("{}{}{}", STRING_COLOR, val, RESET)
-				} else {
-					val
-				}
+				datetime.format("%Y-%m-%d").to_string()
 			},
 			DataType::Timestamp(_, _) => {
 				// Handle timestamp types
-				let val = "timestamp"; // Simplified for now
-				if with_color {
-					format!("{}{}{}", STRING_COLOR, val, RESET)
-				} else {
-					val.to_string()
-				}
+				"timestamp".to_string() // Simplified for now
 			},
 			_ => {
 				// Fallback for other types - try to get a string representation
-				let val = format!("{:?}", column.slice(row_idx, 1))
+				format!("{:?}", column.slice(row_idx, 1))
 					.lines()
 					.next()
 					.unwrap_or("unknown")
@@ -429,17 +367,15 @@ fn format_cell_value(column: &dyn Array, row_idx: usize, data_type: &DataType, w
 					.trim_start_matches("\"")
 					.trim_end_matches("\"")
 					.trim()
-					.to_string();
-				if with_color {
-					format!("{}{}{}", STRING_COLOR, val, RESET)
-				} else {
-					val
-				}
+					.to_string()
 			},
 		};
+		// Don't apply color here - it will be applied during wrapping
 		value
 	}
 }
+
+
 
 fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -> String {
 	if column.is_null(row_idx) {

@@ -6,7 +6,7 @@ use datafusion::arrow::array::Array;
 
 #[derive(Args, Clone)]
 pub struct SizeArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Show per-column sizes")]

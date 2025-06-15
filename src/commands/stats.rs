@@ -7,7 +7,7 @@ use crate::utils::stats::{calculate_basic_stats, calculate_exhaustive_stats, cal
 
 #[derive(Args, Clone)]
 pub struct StatsArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Comma-separated column names or regex patterns")]

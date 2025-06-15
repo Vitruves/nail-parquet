@@ -11,7 +11,7 @@ use datafusion::arrow::datatypes::UInt32Type;
 
 #[derive(Args, Clone)]
 pub struct SampleArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Number of samples", default_value = "10")]

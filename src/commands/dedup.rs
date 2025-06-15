@@ -11,7 +11,7 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct DedupArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Remove duplicate rows", conflicts_with = "col_wise")]

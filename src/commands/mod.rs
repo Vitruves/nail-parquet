@@ -34,6 +34,9 @@ pub mod split;
 // Format Conversion
 pub mod convert;
 
+// Utility
+pub mod update;
+
 #[derive(Subcommand)]
 pub enum Commands {
 	// Data Inspection
@@ -113,4 +116,9 @@ pub enum Commands {
 	#[command(about = "Convert between file formats")]
 	#[command(next_help_heading = "Format Conversion")]
 	Convert(convert::ConvertArgs),
+	
+	// Utility
+	#[command(about = "Check for newer versions")]
+	#[command(next_help_heading = "Utility")]
+	Update(update::UpdateArgs),
 }

@@ -5,7 +5,7 @@ use crate::utils::io::read_data;
 
 #[derive(Args, Clone)]
 pub struct CountArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Output file (if not specified, prints to console)")]

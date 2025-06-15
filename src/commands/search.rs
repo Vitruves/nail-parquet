@@ -8,7 +8,7 @@ use crate::utils::stats::select_columns_by_pattern;
 
 #[derive(Args, Clone)]
 pub struct SearchArgs {
-	#[arg(short, long, help = "Input file")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Value to search for")]
