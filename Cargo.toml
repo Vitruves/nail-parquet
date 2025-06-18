@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.4.0"
+version = "1.4.1"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "A fast parquet utility written in Rust"
@@ -32,7 +32,8 @@ parquet = "53.4"
 
 rand = "0.8"
 statrs = "0.17"
-regex = "1.10"
+regex = "1"
+unicode-width = "0.2"
 rayon = "1.10"
 futures = "0.3"
 num_cpus = "1.16"
@@ -45,10 +46,12 @@ chrono = { version = "0.4", features = ["serde"] }
 term_size = "0.3"
 
 # Terminal interaction for interactive preview
-crossterm = "0.28"
+crossterm = "0.27"
+ratatui = { version = "0.24", default-features = false, features = ["crossterm"] }
 
 # Excel file support
 calamine = "0.26"
+rust_xlsxwriter = "0.88"
 
 [[bin]]
 name = "nail"

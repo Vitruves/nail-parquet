@@ -13,16 +13,25 @@ use tempfile::{tempdir, TempDir};
 /// A struct to hold all test fixtures for a single test.
 /// It manages the temporary directory and paths to all created files,
 /// ensuring automatic cleanup when it goes out of scope.
+#[allow(dead_code)]
 pub struct TestFixtures {
     pub _temp_dir: TempDir, // Held for RAII cleanup
     pub sample_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample2_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_with_nulls_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_with_duplicates_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_for_stratify_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_for_col_dedup_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_mixed_types_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_csv: PathBuf,
+    #[allow(dead_code)]
     pub empty_parquet: PathBuf,
     pub output_dir: PathBuf,
 }
@@ -79,12 +88,22 @@ impl TestFixtures {
     }
 
     /// Helper to get a path for a new output file within the fixture's output directory.
+    #[allow(dead_code)]
     pub fn get_output_path(&self, filename: &str) -> PathBuf {
         self.output_dir.join(filename)
+    }
+
+    #[allow(dead_code)]
+    pub async fn get_row_count(&self, path: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(path.to_str().unwrap(), ParquetReadOptions::default()).await?;
+        let count = df.count().await?;
+        Ok(count)
     }
 }
 
 /// Helper to read a Parquet file and get its row count using DataFusion.
+#[allow(dead_code)]
 pub async fn get_row_count(path: &Path) -> usize {
     let ctx = SessionContext::new();
     let df = ctx
@@ -96,6 +115,7 @@ pub async fn get_row_count(path: &Path) -> usize {
 
 // --- Data Creation Functions (private to this module) ---
 
+#[allow(dead_code)]
 fn create_sample_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -116,6 +136,7 @@ fn create_sample_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_sample2_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("user_id", DataType::Int64, false),
@@ -132,6 +153,7 @@ fn create_sample2_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>>
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_sample_with_nulls_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -150,6 +172,7 @@ fn create_sample_with_nulls_parquet(path: &Path) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_sample_with_duplicates_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -168,6 +191,7 @@ fn create_sample_with_duplicates_parquet(path: &Path) -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_for_stratify_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),
@@ -189,6 +213,7 @@ fn create_for_stratify_parquet(path: &Path) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_for_col_dedup_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("col_a", DataType::Int64, false),
@@ -207,6 +232,7 @@ fn create_for_col_dedup_parquet(path: &Path) -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_mixed_types_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("int_col", DataType::Int64, true),
@@ -227,12 +253,14 @@ fn create_mixed_types_parquet(path: &Path) -> Result<(), Box<dyn std::error::Err
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_sample_csv(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let content = "csv_id,csv_name,csv_val\n10,Frank,1000.0\n11,Grace,1100.0\n12,Heidi,1200.0\n";
     fs::write(path, content)?;
     Ok(())
 }
 
+#[allow(dead_code)]
 fn create_empty_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int64, false),

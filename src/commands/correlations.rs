@@ -4,6 +4,15 @@ use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data;
 use crate::utils::format::display_dataframe;
 use crate::utils::stats::{calculate_correlations, CorrelationType, select_columns_by_pattern};
+use clap::ValueEnum;
+
+#[derive(ValueEnum, Clone, Debug)]
+#[allow(non_camel_case_types)]
+pub enum CorrTest {
+    fisher_exact,
+    chi_sqr,
+    t_test,
+}
 
 #[derive(Args, Clone)]
 pub struct CorrelationsArgs {
@@ -19,8 +28,8 @@ pub struct CorrelationsArgs {
 	#[arg(long, help = "Output correlation matrix format")]
 	pub correlation_matrix: bool,
 	
-	#[arg(long, help = "Include statistical significance tests")]
-	pub stats_tests: bool,
+	#[arg(long, help = "Statistical tests to include (comma-separated)", value_enum, num_args = 1.., value_delimiter = ',')]
+	pub stats_tests: Option<Vec<CorrTest>>,
 	
 	#[arg(long, help = "Number of decimal places for correlation values", default_value = "4")]
 	pub digits: usize,
@@ -125,12 +134,14 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
         eprintln!("Using {} decimal places for correlation values", args.digits);
     }
     
-    let corr_df = calculate_correlations(
+    let include_tests = args.stats_tests.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
+
+let corr_df = calculate_correlations(
         &df, 
         &target_columns, 
         &args.correlation_type,
         args.correlation_matrix,
-        args.stats_tests,
+        include_tests,
         args.digits
     ).await?;
     

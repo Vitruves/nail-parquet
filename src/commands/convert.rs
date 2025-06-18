@@ -6,10 +6,20 @@ use crate::utils::{detect_file_format};
 
 #[derive(Args, Clone)]
 pub struct ConvertArgs {
-	#[arg(help = "Input file")]
+	#[arg(help = "Input file.\n\
+	              Supported input formats:\n\
+	              • Parquet (.parquet)\n\
+	              • CSV (.csv)\n\
+	              • JSON (.json)\n\
+	              • Excel (.xlsx)")]
 	pub input: PathBuf,
 	
-	#[arg(short, long, help = "Output file")]
+	#[arg(short, long, help = "Output file.\n\
+	                           Supported output formats:\n\
+	                           • Parquet (.parquet)\n\
+	                           • CSV (.csv)\n\
+	                           • JSON (.json)\n\
+	                           • Excel (.xlsx) - write support")]
 	pub output: PathBuf,
 	
 	#[arg(short, long, help = "Number of parallel jobs")]

@@ -412,6 +412,50 @@ mod format_and_analysis_tests {
 		let first_row: Value = serde_json::from_str(matrix_lines[0]).unwrap();
 		assert_eq!(first_row["corr_with_id"], 1.0);
 	}
+
+	#[test]
+	fn test_frequency_single_column() {
+		let fixtures = TestFixtures::new();
+		// Test console output (no file output)
+		nail().args(["frequency", fixtures.sample_parquet.to_str().unwrap(), "-c", "name"])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("Frequency Analysis"))
+			.stdout(predicate::str::contains("Alice"))
+			.stdout(predicate::str::contains("frequency"));
+	}
+
+	#[test]
+	fn test_frequency_multiple_columns_with_output() {
+		let fixtures = TestFixtures::new();
+		let out_freq = fixtures.get_output_path("frequency.csv");
+		nail().args(["frequency", fixtures.sample_parquet.to_str().unwrap(), "-c", "name,value", "-o", out_freq.to_str().unwrap()])
+			.assert()
+			.success();
+		
+		let content = fs::read_to_string(out_freq).unwrap();
+		assert!(content.contains("name,value,frequency"));
+		assert!(content.contains("Alice"));
+	}
+
+	#[test]
+	fn test_frequency_verbose_mode() {
+		let fixtures = TestFixtures::new();
+		nail().args(["frequency", fixtures.sample_parquet.to_str().unwrap(), "-c", "name", "-v"])
+			.assert()
+			.success()
+			.stderr(predicate::str::contains("Reading data from"))
+			.stderr(predicate::str::contains("Analyzing frequency for columns"));
+	}
+
+	#[test]
+	fn test_frequency_error_missing_column() {
+		let fixtures = TestFixtures::new();
+		nail().args(["frequency", fixtures.sample_parquet.to_str().unwrap(), "-c", "nonexistent"])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Column 'nonexistent' does not exist"));
+	}
 }
 
 // ---- ERROR & EDGE CASE TESTS ----

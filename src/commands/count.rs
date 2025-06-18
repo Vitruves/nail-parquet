@@ -2,6 +2,7 @@ use clap::Args;
 use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
+use crate::utils::parquet_utils::{get_parquet_row_count_fast, can_use_fast_metadata};
 
 #[derive(Args, Clone)]
 pub struct CountArgs {
@@ -23,8 +24,19 @@ pub async fn execute(args: CountArgs) -> NailResult<()> {
 		eprintln!("Reading data from: {}", args.input.display());
 	}
 	
-	let df = read_data(&args.input).await?;
-	let row_count = df.clone().count().await?;
+	// Use fast metadata reading for Parquet files
+	let row_count = if can_use_fast_metadata(&args.input) {
+		if args.verbose {
+			eprintln!("Using fast Parquet metadata for counting");
+		}
+		get_parquet_row_count_fast(&args.input).await?
+	} else {
+		if args.verbose {
+			eprintln!("Using DataFusion for counting");
+		}
+		let df = read_data(&args.input).await?;
+		df.clone().count().await.map_err(crate::error::NailError::DataFusion)?
+	};
 	
 	if args.verbose {
 		eprintln!("Counted {} rows", row_count);
@@ -53,4 +65,4 @@ pub async fn execute(args: CountArgs) -> NailResult<()> {
 	}
 	
 	Ok(())
-} 
+}

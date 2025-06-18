@@ -12,6 +12,7 @@ pub mod size;
 // Data Analysis
 pub mod stats;
 pub mod correlations;
+pub mod frequency;
 
 // Data Manipulation
 pub mod select;
@@ -19,6 +20,8 @@ pub mod drop;
 pub mod fill;
 pub mod filter;
 pub mod search;
+pub mod rename;
+pub mod create;
 
 // Data Transformation
 pub mod id;
@@ -70,6 +73,9 @@ pub enum Commands {
 	#[command(about = "Calculate correlation matrices")]
 	Correlations(correlations::CorrelationsArgs),
 	
+	#[command(about = "Calculate frequency distributions")]
+	Frequency(frequency::FrequencyArgs),
+	
 	// Data Manipulation
 	#[command(about = "Select specific columns or rows")]
 	#[command(next_help_heading = "Data Manipulation")]
@@ -86,6 +92,10 @@ pub enum Commands {
 	
 	#[command(about = "Search for values in data")]
 	Search(search::SearchArgs),
+	#[command(about = "Rename columns")]
+	Rename(rename::RenameArgs),
+	#[command(about = "Create a new dataset")]
+	Create(create::CreateArgs),
 	
 	// Data Transformation
 	#[command(about = "Add unique identifier column")]

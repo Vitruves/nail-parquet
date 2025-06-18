@@ -2,6 +2,12 @@ use datafusion::prelude::*;
 use datafusion::common::DFSchemaRef;
 use regex::Regex;
 use crate::error::{NailError, NailResult};
+use arrow::array::{StringArray, Float64Array, ArrayRef};
+use arrow::datatypes::{Field, Schema as ArrowSchema, DataType as ArrowDataType};
+use datafusion::arrow::record_batch::RecordBatch;
+use std::sync::Arc;
+use statrs::distribution::{Normal, StudentsT, ChiSquared};
+use statrs::distribution::ContinuousCDF;
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
 pub enum CorrelationType {
@@ -231,22 +237,96 @@ pub async fn calculate_hypothesis_tests(_df: &DataFrame, _columns: &[String]) ->
 }
 
 pub async fn calculate_correlations(
-	df: &DataFrame,
-	columns: &[String],
-	correlation_type: &CorrelationType,
-	matrix_format: bool,
-	_include_tests: bool,
-	digits: usize,
+    df: &DataFrame,
+    columns: &[String],
+    correlation_type: &CorrelationType,
+    matrix_format: bool,
+    include_tests: bool,
+    digits: usize,
 ) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context().await?;
-	let table_name = "temp_table";
-	ctx.register_table(table_name, df.clone().into_view())?;
-	
-	if matrix_format {
-		calculate_correlation_matrix(ctx, table_name, columns, correlation_type, digits).await
-	} else {
-		calculate_correlation_pairs(ctx, table_name, columns, correlation_type, digits).await
-	}
+    let ctx = crate::utils::create_context().await?;
+    let table_name = "temp_table";
+    ctx.register_table(table_name, df.clone().into_view())?;
+
+    // Compute correlations
+    let corr_df = if matrix_format {
+        calculate_correlation_matrix(ctx.clone(), table_name, columns, correlation_type, digits).await?
+    } else {
+        calculate_correlation_pairs(ctx.clone(), table_name, columns, correlation_type, digits).await?
+    };
+
+    // If no tests or in matrix mode, return as is
+    if !include_tests || matrix_format {
+        return Ok(corr_df);
+    }
+
+    // Calculate number of observations once
+    let total_batches = df.clone().collect().await.map_err(NailError::DataFusion)?;
+    let n: usize = total_batches.iter().map(|b| b.num_rows()).sum();
+
+    // Collect correlation pairs and pre-allocate
+    let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
+    let total_pairs: usize = batches.iter().map(|b| b.num_rows()).sum();
+    let mut col1_vec = Vec::with_capacity(total_pairs);
+    let mut col2_vec = Vec::with_capacity(total_pairs);
+    let mut corr_vec = Vec::with_capacity(total_pairs);
+    let mut p_fisher = Vec::with_capacity(total_pairs);
+    let mut p_t = Vec::with_capacity(total_pairs);
+    let mut p_chi2 = Vec::with_capacity(total_pairs);
+
+
+    for batch in batches {
+        let schema = batch.schema();
+        let col1_idx = schema.index_of("column1").unwrap();
+        let col2_idx = schema.index_of("column2").unwrap();
+        let corr_idx = schema.index_of("correlation").unwrap();
+        let col1_arr = batch.column(col1_idx).as_any().downcast_ref::<StringArray>().unwrap();
+        let col2_arr = batch.column(col2_idx).as_any().downcast_ref::<StringArray>().unwrap();
+        let corr_arr = batch.column(corr_idx).as_any().downcast_ref::<Float64Array>().unwrap();
+        for i in 0..batch.num_rows() {
+            let r = corr_arr.value(i);
+            col1_vec.push(col1_arr.value(i).to_string());
+            col2_vec.push(col2_arr.value(i).to_string());
+            corr_vec.push(r);
+            // Fisher Z-test
+            let z = 0.5 * ((1.0 + r) / (1.0 - r)).ln() * ((n as f64 - 3.0).sqrt());
+            let p_z = 2.0 * (1.0 - <Normal as ContinuousCDF<f64, f64>>::cdf(&Normal::new(0.0, 1.0).unwrap(), z.abs()));
+            p_fisher.push(p_z);
+            // T-test
+            let t = r * ((n as f64 - 2.0) / (1.0 - r * r)).sqrt();
+            let student = StudentsT::new(0.0, 1.0, (n - 2) as f64).unwrap();
+            let p_tval = 2.0 * (1.0 - <StudentsT as ContinuousCDF<f64, f64>>::cdf(&student, t.abs()));
+            p_t.push(p_tval);
+            // Chi-squared
+            let chi2 = t * t;
+            let chisq = ChiSquared::new(1.0).unwrap();
+            let p_chival = 1.0 - <ChiSquared as ContinuousCDF<f64, f64>>::cdf(&chisq, chi2);
+            p_chi2.push(p_chival);
+        }
+    }
+
+    // Build new RecordBatch
+    let arrow_schema = Arc::new(ArrowSchema::new(vec![
+        Field::new("column1", ArrowDataType::Utf8, false),
+        Field::new("column2", ArrowDataType::Utf8, false),
+        Field::new("correlation", ArrowDataType::Float64, false),
+        Field::new("p_fisher", ArrowDataType::Float64, false),
+        Field::new("p_t", ArrowDataType::Float64, false),
+        Field::new("p_chi2", ArrowDataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        arrow_schema.clone(),
+        vec![
+            Arc::new(StringArray::from(col1_vec)) as ArrayRef,
+            Arc::new(StringArray::from(col2_vec)) as ArrayRef,
+            Arc::new(Float64Array::from(corr_vec)) as ArrayRef,
+            Arc::new(Float64Array::from(p_fisher)) as ArrayRef,
+            Arc::new(Float64Array::from(p_t)) as ArrayRef,
+            Arc::new(Float64Array::from(p_chi2)) as ArrayRef,
+        ],
+    ).map_err(NailError::Arrow)?;
+
+    Ok(ctx.read_batch(batch).map_err(NailError::DataFusion)?)
 }
 
 async fn calculate_correlation_matrix(

@@ -8,7 +8,7 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct AppendArgs {
-	#[arg(short, long, help = "Input file (base table)")]
+	#[arg(help = "Input file (base table)")]
 	pub input: PathBuf,
 	
 	#[arg(long, help = "Files to append (comma-separated)")]

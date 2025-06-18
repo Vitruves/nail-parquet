@@ -262,23 +262,27 @@ nail stats data.parquet -t basic -o stats.json -f json
 
 #### `nail correlations`
 
-Compute correlation matrices and pairwise correlations between numeric columns.
+Compute correlation matrices between numeric columns with optional statistical significance testing.
 
 ```bash
-# Pairwise correlations for all numeric columns
+# Basic Pearson correlation
 nail correlations data.parquet
 
-# Correlation matrix format
-nail correlations data.parquet --correlation-matrix
-
-# Specific correlation type
+# Specific correlation types
+nail correlations data.parquet -t kendall
 nail correlations data.parquet -t spearman
 
-# Correlations for selected columns
+# Correlations for specific columns
 nail correlations data.parquet -c "price,volume,quantity"
 
+# Output as correlation matrix format
+nail correlations data.parquet --correlation-matrix
+
 # Include statistical significance tests
-nail correlations data.parquet --stats-tests --correlation-matrix
+nail correlations data.parquet --stats-tests
+
+# Comprehensive correlation analysis with significance tests
+nail correlations data.parquet --stats-tests --correlation-matrix -o correlations.json -f json
 ```
 
 **Options:**
@@ -286,7 +290,32 @@ nail correlations data.parquet --stats-tests --correlation-matrix
 - `-c, --columns PATTERN` - Comma-separated column names or regex patterns
 - `-t, --type TYPE` - Correlation type: `pearson`, `kendall`, `spearman` (default: pearson)
 - `--correlation-matrix` - Output as correlation matrix format
-- `--stats-tests` - Include statistical significance tests
+- `--stats-tests` - Include statistical significance tests (p-values, confidence intervals)
+
+#### `nail frequency`
+
+Compute frequency tables for categorical columns showing value counts and distributions.
+
+```bash
+# Basic frequency table for a single column
+nail frequency data.parquet -c "category"
+
+# Multiple columns frequency analysis
+nail frequency data.parquet -c "category,status,region"
+
+# Save frequency table to file
+nail frequency data.parquet -c "product_type" -o frequency_table.csv -f csv
+
+# Verbose output with progress information
+nail frequency data.parquet -c "category,status" --verbose
+
+# JSON output for programmatic use
+nail frequency data.parquet -c "region" -o frequencies.json -f json
+```
+
+**Options:**
+
+- `-c, --columns PATTERN` - Comma-separated column names to analyze
 
 ### Data Manipulation
 
@@ -391,6 +420,58 @@ nail fill data.parquet --method median -c "price,volume"
 - `--method METHOD` - Fill method: `value`, `mean`, `median`, `mode`, `forward`, `backward` (default: value)
 - `--value VALUE` - Fill value (required for 'value' method)
 - `-c, --columns PATTERN` - Comma-separated column names to fill
+
+#### `nail update`
+
+Update column values based on conditions or expressions.
+
+```bash
+# Update column values with simple assignment
+nail update data.parquet --set "status=active" -o updated.parquet
+
+# Conditional updates
+nail update data.parquet --set "discount=0.1" --where "category=premium" -o updated.parquet
+
+# Update multiple columns
+nail update data.parquet --set "status=active,priority=high" --where "score>90" -o updated.parquet
+
+# Mathematical expressions
+nail update data.parquet --set "total=price*quantity" -o updated.parquet
+
+# Update with null handling
+nail update data.parquet --set "category=unknown" --where "category IS NULL" -o updated.parquet
+```
+
+**Options:**
+
+- `--set ASSIGNMENTS` - Comma-separated column assignments (column=value or column=expression)
+- `--where CONDITION` - Optional condition for selective updates
+
+#### `nail create`
+
+Create new columns based on expressions or computations from existing columns.
+
+```bash
+# Create a single new column
+nail create data.parquet --column "total=price*quantity" -o enhanced.parquet
+
+# Create multiple columns
+nail create data.parquet --column "total=price*quantity,margin=price-cost" -o enhanced.parquet
+
+# Create columns with complex expressions
+nail create data.parquet --column "bonus=salary*0.1,adjusted=(salary+bonus)*1.2" -o enhanced.parquet
+
+# Filter rows while creating columns
+nail create data.parquet --column "category_score=score*2" --row "score>50" -o filtered_enhanced.parquet
+
+# Mathematical operations with parentheses
+nail create data.parquet --column "complex=(price+tax)*quantity-discount" -o complex.parquet
+```
+
+**Options:**
+
+- `-c, --column SPECS` - Column creation specifications (name=expression), comma-separated
+- `-r, --row FILTER` - Row filter expression to apply before creating columns
 
 #### `nail dedup`
 
@@ -497,53 +578,55 @@ nail id data.parquet --create -o data_with_ids.parquet
 
 #### `nail merge`
 
-Join two datasets based on key columns.
+Join two datasets horizontally based on a common key column.
 
 ```bash
-# Inner join
-nail merge -i left.parquet --right right.parquet --key id
+# Inner join (default)
+nail merge left.parquet --right right.parquet --key id -o merged.parquet
 
-# Left join
-nail merge -i users.parquet --right orders.parquet --left-join --key user_id
+# Left join - keep all records from left table
+nail merge customers.parquet --right orders.parquet --left-join --key customer_id -o customer_orders.parquet
 
-# Right join
-nail merge -i products.parquet --right sales.parquet --right-join --key product_id
+# Right join - keep all records from right table
+nail merge orders.parquet --right customers.parquet --right-join --key customer_id -o order_customers.parquet
 
-# Join with different key names
-nail merge -i table1.parquet --right table2.parquet --key-mapping "user_id=customer_id"
+# Full outer join - keep all records from both tables
+nail merge table1.parquet --right table2.parquet --full-join --key id -o full_merged.parquet
 
-# Save merged result
-nail merge -i left.parquet --right right.parquet --key id -o merged.parquet
+# Merge with verbose output
+nail merge left.parquet --right right.parquet --key id --verbose -o merged.parquet
 ```
 
 **Options:**
 
-- `-i, --input FILE` - Input file path (left table, required)
 - `--right FILE` - Right table file to merge with (required)
 - `--key COLUMN` - Join key column name (required)
-- `--left-join` - Perform left join
-- `--right-join` - Perform right join
-- `--key-mapping MAPPING` - Key mapping for different column names (format: left_col=right_col)
+- `--left-join` - Perform left join (keep all left records)
+- `--right-join` - Perform right join (keep all right records)
+- `--full-join` - Perform full outer join (keep all records from both tables)
 
 #### `nail append`
 
-Concatenate multiple datasets vertically.
+Append multiple datasets vertically (union operation).
 
 ```bash
-# Append files
-nail append base.parquet --files "file1.parquet,file2.parquet,file3.parquet"
+# Append files with matching schemas
+nail append base.parquet --files "file1.parquet,file2.parquet" -o combined.parquet
 
-# Append with schema mismatch handling
-nail append base.parquet --files "data1.parquet,data2.parquet" --ignore-schema
+# Append with verbose logging
+nail append base.parquet --files "jan.parquet,feb.parquet,mar.parquet" --verbose -o q1_data.parquet
 
-# Verbose append operation
-nail append base.parquet --files "*.parquet" -o combined.parquet --verbose
+# Append CSV files
+nail append base.csv --files "additional1.csv,additional2.csv" -o combined.csv
+
+# Force append with schema differences (fills missing columns with nulls)
+nail append base.parquet --files "different_schema.parquet" --force -o combined.parquet
 ```
 
 **Options:**
 
 - `--files FILES` - Comma-separated list of files to append (required)
-- `--ignore-schema` - Ignore schema mismatches and force append
+- `--force` - Force append even with schema differences
 
 #### `nail split`
 
@@ -594,8 +677,8 @@ nail convert large_dataset.csv -o large_dataset.parquet --verbose
 
 **Supported Formats:**
 
-- **Input**: Parquet, CSV, JSON, Excel (read-only)
-- **Output**: Parquet, CSV, JSON
+- **Input**: Parquet, CSV, JSON, Excel (xlsx)
+- **Output**: Parquet, CSV, JSON, Excel (xlsx)
 
 #### `nail count`
 
@@ -622,7 +705,10 @@ nail stats sales_data.parquet -t basic
 
 # Column inspection
 nail headers sales_data.parquet -f "price"
-nail correlations sales_data.parquet -c "price,quantity,discount"
+nail correlations sales_data.parquet -c "price,quantity,discount" --stats-tests
+
+# Frequency analysis for categorical data
+nail frequency sales_data.parquet -c "category,region,status"
 ```
 
 ### Data Quality Investigation
@@ -640,54 +726,44 @@ nail size data.parquet --columns --bits
 
 # Check for specific patterns in text fields
 nail search data.parquet --value "@gmail.com" -c "email" --exact
+
+# Frequency analysis to identify data quality issues
+nail frequency data.parquet -c "status" --verbose
 ```
 
-### Data Cleaning Pipeline
+### Data Enhancement and Transformation
 
 ```bash
-# 1. Analyze data size and structure
-nail size raw_data.parquet --columns --rows
-nail search raw_data.parquet --value "null" --ignore-case
+# Create new calculated columns
+nail create sales_data.parquet --column "total=price*quantity,profit=total-cost" -o enhanced_sales.parquet
 
-# 2. Remove duplicates
-nail dedup raw_data.parquet --row-wise -c "id,timestamp" -o dedup_data.parquet
+# Update existing data based on conditions
+nail update enhanced_sales.parquet --set "category=premium" --where "total>1000" -o updated_sales.parquet
 
-# 3. Check for missing values and data quality
-nail filter dedup_data.parquet -r no-nan -o clean_step1.parquet
+# Create complex derived metrics
+nail create customer_data.parquet --column "lifetime_value=orders*avg_order*retention_rate" -o customer_metrics.parquet
 
-# 4. Remove unwanted columns
-nail drop clean_step1.parquet -c "debug_,temp_" -o clean_step2.parquet
-
-# 5. Fill remaining missing values
-nail fill clean_step2.parquet --method value --value 0 -c "price,quantity" -o clean_final.parquet
-
-# 6. Verify the result
-nail stats clean_final.parquet -t exhaustive
-nail size clean_final.parquet --columns
+# Filter and enhance in one step
+nail create large_dataset.parquet --column "score=performance*weight" --row "active=true" -o active_scored.parquet
 ```
 
-### Sampling and Analysis
+### Advanced Analytics Pipeline
 
 ```bash
-# Create stratified sample for analysis
-nail sample large_dataset.parquet -n 10000 --method stratified --stratify-by category -o sample.parquet
+# 1. Comprehensive correlation analysis with significance testing
+nail correlations dataset.parquet --stats-tests --correlation-matrix -o correlations.json -f json
 
-# Analyze the sample
-nail correlations sample.parquet --correlation-matrix -o correlation_matrix.json -f json
-nail stats sample.parquet -t exhaustive -o sample_stats.json -f json
-```
+# 2. Frequency analysis for categorical variables
+nail frequency dataset.parquet -c "category,region,customer_type" -o frequencies.csv -f csv
 
-### Data Integration
+# 3. Create derived features for analysis
+nail create dataset.parquet --column "revenue_per_customer=total_revenue/customer_count,growth_rate=(current-previous)/previous" -o featured_data.parquet
 
-```bash
-# Merge customer and order data
-nail merge -i customers.parquet --right orders.parquet --left-join --key customer_id -o customer_orders.parquet
+# 4. Update classifications based on new metrics
+nail update featured_data.parquet --set "segment=high_value" --where "revenue_per_customer>500" -o segmented_data.parquet
 
-# Append monthly data files
-nail append jan.parquet --files "feb.parquet,mar.parquet,apr.parquet" -o q1_data.parquet
-
-# Convert final result to CSV for external tools
-nail convert q1_data.parquet -o q1_data.csv
+# 5. Final statistical summary
+nail stats segmented_data.parquet -t exhaustive -o final_stats.json -f json
 ```
 
 ## Performance Tips

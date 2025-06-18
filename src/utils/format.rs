@@ -303,8 +303,13 @@ fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_t
 				}
 			},
 			DataType::Float64 => {
-				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
-					format!("{:.2}", array.value(row_idx))
+                if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
+                    let val = array.value(row_idx);
+                    if val.abs() < 0.001 {
+                        format!("{:.2e}", val)
+                    } else {
+                        format!("{:.3}", val)
+                    }
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));

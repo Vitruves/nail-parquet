@@ -7,10 +7,10 @@ use crate::utils::format::display_dataframe;
 
 #[derive(Args, Clone)]
 pub struct MergeArgs {
-	#[arg(short, long, help = "Input file (left table)")]
+	#[arg(help = "Input file (left table)")]
 	pub input: PathBuf,
 	
-	#[arg(long, help = "Right table file to merge with")]
+	#[arg(short, long, help = "Right table file to merge with")]
 	pub right: PathBuf,
 	
 	#[arg(long, help = "Perform left join")]
