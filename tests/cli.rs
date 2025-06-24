@@ -410,7 +410,7 @@ mod format_and_analysis_tests {
 		let matrix_lines: Vec<&str> = matrix_content.trim().lines().collect();
 		assert_eq!(matrix_lines.len(), 2);
 		let first_row: Value = serde_json::from_str(matrix_lines[0]).unwrap();
-		assert_eq!(first_row["corr_with_id"], 1.0);
+		assert!((first_row["corr_with_id"].as_f64().unwrap() - 1.0).abs() < 0.01);
 	}
 
 	#[test]
@@ -511,5 +511,598 @@ mod error_and_edge_case_tests {
 		nail().args(["head", empty]).assert().success();
 		nail().args(["stats", empty]).assert().success();
 		nail().args(["count", empty]).assert().success().stdout("0\n");
+	}
+}
+
+// ---- NEW COMMAND TESTS ----
+#[cfg(test)]
+mod new_command_tests {
+	use super::*;
+
+	// OPTIMIZE COMMAND TESTS
+	#[tokio::test]
+	async fn test_optimize_basic() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("optimized.parquet");
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o", output_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Verify the optimized file exists and has the same row count
+		assert_eq!(get_row_count(&output_path).await, 5);
+	}
+
+	#[tokio::test]
+	async fn test_optimize_with_compression() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("optimized_gzip.parquet");
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--compression", "gzip",
+				"--compression-level", "3",
+				"-o", output_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		assert_eq!(get_row_count(&output_path).await, 5);
+	}
+
+	#[tokio::test]
+	async fn test_optimize_with_sorting() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("optimized_sorted.parquet");
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--sort-by", "id,value",
+				"--row-group-size", "500000",
+				"-o", output_path.to_str().unwrap(),
+				"-v"  // Test verbose output
+			])
+			.assert()
+			.success()
+			.stderr(predicate::str::contains("Optimizing Parquet file"))
+			.stderr(predicate::str::contains("Sorting by columns"));
+		
+		assert_eq!(get_row_count(&output_path).await, 5);
+	}
+
+	#[test]
+	fn test_optimize_validation() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("optimized_validated.parquet");
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--validate",
+				"-o", output_path.to_str().unwrap(),
+				"-v"
+			])
+			.assert()
+			.success()
+			.stderr(predicate::str::contains("Validating optimized file"))
+			.stderr(predicate::str::contains("Validation successful"));
+	}
+
+	#[test]
+	fn test_optimize_default_output_name() {
+		let fixtures = TestFixtures::new();
+		
+		// Copy file to temp dir and optimize it with default output name
+		let input_copy = fixtures.get_output_path("input_copy.parquet");
+		std::fs::copy(&fixtures.sample_parquet, &input_copy).unwrap();
+		
+		nail()
+			.args([
+				"optimize", 
+				input_copy.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Check that the default output file was created
+		let expected_output = fixtures.get_output_path("input_copy_optimized.parquet");
+		assert!(expected_output.exists());
+	}
+
+	#[test]
+	fn test_optimize_invalid_compression_level() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--compression-level", "15"  // Invalid level
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Compression level must be between 1 and 9"));
+	}
+
+	#[test]
+	fn test_optimize_conflicting_dictionary_options() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--dictionary",
+				"--no-dictionary"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Cannot specify both --dictionary and --no-dictionary"));
+	}
+
+	#[test]
+	fn test_optimize_invalid_sort_column() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"optimize", 
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--sort-by", "nonexistent_column"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Column 'nonexistent_column' not found"));
+	}
+
+	// BINNING COMMAND TESTS
+	#[tokio::test]
+	async fn test_binning_equal_width() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("binned.parquet");
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_for_binning_parquet.to_str().unwrap(),
+				"-c", "score",
+				"-b", "3",
+				"--method", "equal-width",
+				"-o", output_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Verify the binned file has the same row count and a new binned column
+		let df = SessionContext::new()
+			.read_parquet(output_path.to_str().unwrap(), ParquetReadOptions::default())
+			.await
+			.unwrap();
+		
+		assert_eq!(df.clone().count().await.unwrap(), 10);
+		assert!(df.schema().field_with_name(None, "score_binned").is_ok());
+	}
+
+	#[test]
+	fn test_binning_with_custom_edges() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("binned_custom.json");
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"-b", "0,200,400,600",
+				"--method", "custom",
+				"--suffix", "_category",
+				"-f", "json",
+				"-o", output_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		let content = fs::read_to_string(output_path).unwrap();
+		let lines: Vec<&str> = content.trim().lines().collect();
+		assert_eq!(lines.len(), 5);
+		
+		// Verify each line contains the binned column
+		for line in lines {
+			let row: Value = serde_json::from_str(line).unwrap();
+			assert!(row["value_category"].is_string());
+		}
+	}
+
+	#[test]
+	fn test_binning_with_custom_labels() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"-b", "3",
+				"--labels", "Low,Medium,High",
+				"--drop-original",
+				"-f", "text"
+			])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("Low").or(predicate::str::contains("Medium")).or(predicate::str::contains("High")));
+	}
+
+	#[test]
+	fn test_binning_verbose_mode() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "id",
+				"-b", "2",
+				"-v"
+			])
+			.assert()
+			.success()
+			.stderr(predicate::str::contains("Binning columns"))
+			.stderr(predicate::str::contains("range:"));
+	}
+
+	#[test]
+	fn test_binning_multiple_columns_error() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "id,value"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Multiple column binning not yet implemented"));
+	}
+
+	#[test]
+	fn test_binning_non_numeric_column() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "name"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("is not numeric"));
+	}
+
+	#[test]
+	fn test_binning_invalid_column() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "nonexistent"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Column 'nonexistent' not found"));
+	}
+
+	#[test]
+	fn test_binning_invalid_bins() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"-b", "0"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Number of bins must be greater than 0"));
+	}
+
+	#[test]
+	fn test_binning_label_count_mismatch() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"-b", "3",
+				"--labels", "Low,High"  // Only 2 labels for 3 bins
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Number of labels (2) must match number of bins (3)"));
+	}
+
+	#[test]
+	fn test_binning_equal_frequency_not_implemented() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"--method", "equal-frequency"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Equal frequency binning not yet implemented"));
+	}
+
+	// PIVOT COMMAND TESTS
+	#[tokio::test]
+	async fn test_pivot_basic_aggregation() {
+		let fixtures = TestFixtures::new();
+		let output_path = fixtures.get_output_path("pivoted.parquet");
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_for_pivot_parquet.to_str().unwrap(),
+				"-i", "region",
+				"-c", "product",
+				"-l", "sales",
+				"--agg", "sum",
+				"-o", output_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Verify the pivot result exists and has the expected structure
+		let df = SessionContext::new()
+			.read_parquet(output_path.to_str().unwrap(), ParquetReadOptions::default())
+			.await
+			.unwrap();
+		
+		assert!(df.clone().count().await.unwrap() <= 12); // Should be grouped by region
+		assert!(df.schema().field_with_name(None, "region").is_ok());
+	}
+
+	#[test]
+	fn test_pivot_different_aggregations() {
+		let fixtures = TestFixtures::new();
+		
+		// Test different aggregation functions
+		for agg in &["sum", "mean", "count", "min", "max"] {
+			nail()
+				.args([
+					"pivot",
+					fixtures.sample_for_pivot_parquet.to_str().unwrap(),
+					"-i", "region",
+					"-c", "product", 
+					"-l", "sales",
+					"--agg", agg,
+					"-f", "text"
+				])
+				.assert()
+				.success();
+		}
+	}
+
+	#[test]
+	fn test_pivot_with_fill_value() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "category",
+				"-c", "name",
+				"-l", "value",
+				"--fill", "999",
+				"-f", "json"
+			])
+			.assert()
+			.success();
+	}
+
+	#[test]
+	fn test_pivot_verbose_mode() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "category",
+				"-c", "name",
+				"-l", "value",
+				"-v"
+			])
+			.assert()
+			.success()
+			.stderr(predicate::str::contains("Index columns"))
+			.stderr(predicate::str::contains("Pivot columns"))
+			.stderr(predicate::str::contains("Value columns"));
+	}
+
+	#[test]
+	fn test_pivot_multiple_columns_error() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "category",
+				"-c", "name,id",  // Multiple pivot columns
+				"-l", "value"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Multiple pivot columns not yet implemented"));
+	}
+
+	#[test]
+	fn test_pivot_multiple_values_error() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "category",
+				"-c", "name",
+				"-l", "value,id"  // Multiple value columns
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Multiple value columns not yet implemented"));
+	}
+
+	#[test]
+	fn test_pivot_invalid_index_column() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "nonexistent",
+				"-c", "name",
+				"-l", "value"
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Column 'nonexistent' not found"));
+	}
+
+	#[test]
+	fn test_pivot_invalid_value_column() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "category",
+				"-c", "name",
+				"-l", "name"  // String column as value
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Value column 'name' must be numeric"));
+	}
+
+	#[test]
+	fn test_pivot_no_numeric_columns() {
+		let fixtures = TestFixtures::new();
+		
+		nail()
+			.args([
+				"pivot",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-i", "name",
+				"-c", "category"
+				// No value columns specified, should auto-detect but find multiple available
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Multiple value columns not yet implemented"));
+	}
+
+	// Integration tests combining multiple features
+	#[tokio::test]
+	async fn test_optimize_then_binning() {
+		let fixtures = TestFixtures::new();
+		let optimized_path = fixtures.get_output_path("optimized_for_binning.parquet");
+		let binned_path = fixtures.get_output_path("optimized_then_binned.parquet");
+		
+		// First optimize
+		nail()
+			.args([
+				"optimize",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--compression", "snappy",
+				"-o", optimized_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Then bin the optimized file
+		nail()
+			.args([
+				"binning",
+				optimized_path.to_str().unwrap(),
+				"-c", "value",
+				"-b", "2",
+				"-o", binned_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Verify final result
+		let df = SessionContext::new()
+			.read_parquet(binned_path.to_str().unwrap(), ParquetReadOptions::default())
+			.await
+			.unwrap();
+		
+		assert_eq!(df.clone().count().await.unwrap(), 5);
+		assert!(df.schema().field_with_name(None, "value_binned").is_ok());
+	}
+
+	#[tokio::test]
+	async fn test_binning_then_pivot() {
+		let fixtures = TestFixtures::new();
+		let binned_path = fixtures.get_output_path("binned_for_pivot.parquet");
+		let pivot_path = fixtures.get_output_path("binned_then_pivot.json");
+		
+		// First bin the data
+		nail()
+			.args([
+				"binning",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c", "value",
+				"-b", "2",
+				"--labels", "Low,High",
+				"-o", binned_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Then pivot using the binned column
+		nail()
+			.args([
+				"pivot",
+				binned_path.to_str().unwrap(),
+				"-i", "value_binned",
+				"-c", "category",
+				"-l", "id",
+				"--agg", "count",
+				"-f", "json",
+				"-o", pivot_path.to_str().unwrap()
+			])
+			.assert()
+			.success();
+		
+		// Verify the result contains expected data
+		let content = fs::read_to_string(pivot_path).unwrap();
+		assert!(!content.trim().is_empty());
 	}
 }

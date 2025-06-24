@@ -11,6 +11,8 @@ A high-performance command-line utility for working with Parquet files, built wi
 - **Comprehensive data operations**: inspection, statistics, filtering, sampling, transformations
 - **Data quality tools**: search, deduplication, size analysis, missing value handling
 - **Advanced features**: joins, unions, schema manipulation, stratified sampling
+- **File optimization**: compression, sorting, dictionary encoding for better performance
+- **Data analysis tools**: binning, pivot tables, correlation analysis
 - **Flexible output**: console display or file output in multiple formats
 - **Production-ready** with robust error handling and verbose logging
 
@@ -651,6 +653,96 @@ nail split data.parquet --ratio "0.6,0.2,0.2" --random 42 --output-dir splits/
 - `--stratified-by COLUMN` - Column for stratified splitting
 - `-r, --random SEED` - Random seed for reproducible splits
 
+### File Optimization
+
+#### `nail optimize`
+
+Optimize Parquet files by applying compression, sorting, and encoding techniques.
+
+```bash
+# Basic optimization with default compression (snappy)
+nail optimize input.parquet -o optimized.parquet
+
+# Optimize with specific compression type
+nail optimize input.parquet -o optimized.parquet --compression gzip
+
+# Sort data while optimizing
+nail optimize input.parquet -o optimized.parquet --sort-by "timestamp,id"
+
+# Enable dictionary encoding for better compression
+nail optimize input.parquet -o optimized.parquet --dictionary-encoding
+
+# Comprehensive optimization
+nail optimize input.parquet -o optimized.parquet --compression zstd --sort-by "date,category" --dictionary-encoding --verbose
+```
+
+**Options:**
+
+- `-o, --output FILE` - Output file path (required)
+- `--compression TYPE` - Compression type: `snappy`, `gzip`, `zstd`, `brotli` (default: snappy)
+- `--sort-by COLUMNS` - Comma-separated columns to sort by
+- `--dictionary-encoding` - Enable dictionary encoding for string columns
+- `-v, --verbose` - Show optimization progress and statistics
+
+### Data Analysis & Transformation
+
+#### `nail binning`
+
+Bin continuous variables into categorical ranges for analysis.
+
+```bash
+# Equal-width binning with 5 bins
+nail binning data.parquet -c "age" --bins 5 -o binned.parquet
+
+# Equal-frequency binning
+nail binning data.parquet -c "income" --method equal-frequency --bins 4 -o binned.parquet
+
+# Custom bins with specific thresholds
+nail binning data.parquet -c "score" --method custom --thresholds "0,50,80,90,100" -o binned.parquet
+
+# Add bin labels
+nail binning data.parquet -c "temperature" --bins 3 --labels "Cold,Warm,Hot" -o binned.parquet
+
+# Multiple binning operations
+nail binning data.parquet -c "age" --bins 5 --bin-column-name "age_group" --verbose -o enhanced.parquet
+```
+
+**Options:**
+
+- `-c, --column COLUMN` - Column to bin (required)
+- `--bins N` - Number of bins (default: 5)
+- `--method METHOD` - Binning method: `equal-width`, `equal-frequency`, `custom` (default: equal-width)
+- `--thresholds VALUES` - Comma-separated threshold values for custom binning
+- `--labels LABELS` - Comma-separated bin labels
+- `--bin-column-name NAME` - Name for the new bin column (default: "{column}_bin")
+- `-o, --output FILE` - Output file path (required)
+
+#### `nail pivot`
+
+Create pivot tables for data aggregation and cross-tabulation.
+
+```bash
+# Basic pivot table with sum aggregation
+nail pivot data.parquet --pivot-by "region" --value-column "sales" -o pivot.parquet
+
+# Pivot with different aggregation functions
+nail pivot data.parquet --pivot-by "category" --value-column "revenue" --aggregation mean -o avg_pivot.parquet
+
+# Multiple aggregation types
+nail pivot data.parquet --pivot-by "quarter" --value-column "profit" --aggregation "sum,mean,count" -o multi_agg_pivot.parquet
+
+# Complex pivot with row grouping
+nail pivot sales_data.parquet --pivot-by "product" --value-column "amount" --aggregation sum --verbose -o product_pivot.parquet
+```
+
+**Options:**
+
+- `--pivot-by COLUMN` - Column to pivot on (becomes new columns) (required)
+- `--value-column COLUMN` - Column containing values to aggregate (required)
+- `--aggregation FUNC` - Aggregation function: `sum`, `mean`, `count`, `min`, `max` or comma-separated list (default: sum)
+- `-o, --output FILE` - Output file path (required)
+- `-v, --verbose` - Show pivot operation progress
+
 ### Format Conversion
 
 #### `nail convert`
@@ -745,6 +837,25 @@ nail create customer_data.parquet --column "lifetime_value=orders*avg_order*rete
 
 # Filter and enhance in one step
 nail create large_dataset.parquet --column "score=performance*weight" --row "active=true" -o active_scored.parquet
+```
+
+### Data Optimization and Processing Pipeline
+
+```bash
+# 1. Optimize raw data files for better performance
+nail optimize raw_data.parquet -o optimized_data.parquet --compression zstd --sort-by "timestamp,customer_id" --dictionary-encoding --verbose
+
+# 2. Create analytical features with binning
+nail binning optimized_data.parquet -c "age" --bins 5 --labels "Young,Adult,Middle,Senior,Elder" --bin-column-name "age_group" -o aged_data.parquet
+
+# 3. Create pivot analysis for business insights
+nail pivot aged_data.parquet --pivot-by "age_group" --value-column "revenue" --aggregation "sum,mean,count" -o age_revenue_pivot.parquet
+
+# 4. Add derived metrics
+nail create age_revenue_pivot.parquet --column "revenue_per_transaction=sum_revenue/count_revenue" -o enhanced_pivot.parquet
+
+# 5. Statistical analysis of optimized data
+nail stats enhanced_pivot.parquet -t exhaustive -o optimization_stats.json -f json
 ```
 
 ### Advanced Analytics Pipeline

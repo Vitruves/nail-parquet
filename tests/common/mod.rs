@@ -30,6 +30,10 @@ pub struct TestFixtures {
     #[allow(dead_code)]
     pub sample_mixed_types_parquet: PathBuf,
     #[allow(dead_code)]
+    pub sample_for_binning_parquet: PathBuf,
+    #[allow(dead_code)]
+    pub sample_for_pivot_parquet: PathBuf,
+    #[allow(dead_code)]
     pub sample_csv: PathBuf,
     #[allow(dead_code)]
     pub empty_parquet: PathBuf,
@@ -66,6 +70,12 @@ impl TestFixtures {
         let sample_mixed_types_parquet = base_path.join("sample_mixed_types.parquet");
         create_mixed_types_parquet(&sample_mixed_types_parquet).unwrap();
 
+        let sample_for_binning_parquet = base_path.join("sample_for_binning.parquet");
+        create_sample_for_binning_parquet(&sample_for_binning_parquet).unwrap();
+
+        let sample_for_pivot_parquet = base_path.join("sample_for_pivot.parquet");
+        create_sample_for_pivot_parquet(&sample_for_pivot_parquet).unwrap();
+
         let sample_csv = base_path.join("sample.csv");
         create_sample_csv(&sample_csv).unwrap();
 
@@ -81,6 +91,8 @@ impl TestFixtures {
             sample_for_stratify_parquet,
             sample_for_col_dedup_parquet,
             sample_mixed_types_parquet,
+            sample_for_binning_parquet,
+            sample_for_pivot_parquet,
             sample_csv,
             empty_parquet,
             output_dir,
@@ -269,6 +281,64 @@ fn create_empty_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let batch = RecordBatch::try_new(schema.clone(), vec![
         Arc::new(Int64Array::from(Vec::<i64>::new())),
         Arc::new(StringArray::from(Vec::<Option<String>>::new())),
+    ])?;
+    let file = File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn create_sample_for_binning_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Create data with a wider range of numeric values for better binning tests
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, false),
+        Field::new("score", DataType::Float64, false),
+        Field::new("age", DataType::Int64, false),
+        Field::new("grade", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10])),
+        Arc::new(Float64Array::from(vec![15.5, 25.0, 35.7, 45.2, 55.9, 65.1, 75.4, 85.8, 95.3, 105.6])),
+        Arc::new(Int64Array::from(vec![18, 22, 25, 28, 32, 35, 40, 45, 50, 55])),
+        Arc::new(StringArray::from(vec!["A", "B", "A", "C", "B", "A", "C", "B", "A", "C"])),
+    ])?;
+    let file = File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn create_sample_for_pivot_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    // Create data suitable for pivot table testing
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("region", DataType::Utf8, false),
+        Field::new("product", DataType::Utf8, false),
+        Field::new("sales", DataType::Float64, false),
+        Field::new("quantity", DataType::Int64, false),
+        Field::new("quarter", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(schema.clone(), vec![
+        Arc::new(StringArray::from(vec![
+            "North", "North", "South", "South", "East", "East", "West", "West",
+            "North", "South", "East", "West"
+        ])),
+        Arc::new(StringArray::from(vec![
+            "Widget", "Gadget", "Widget", "Gadget", "Widget", "Gadget", "Widget", "Gadget",
+            "Tool", "Tool", "Tool", "Tool"
+        ])),
+        Arc::new(Float64Array::from(vec![
+            1000.0, 1500.0, 800.0, 1200.0, 900.0, 1100.0, 700.0, 1000.0,
+            600.0, 750.0, 850.0, 950.0
+        ])),
+        Arc::new(Int64Array::from(vec![10, 15, 8, 12, 9, 11, 7, 10, 6, 7, 8, 9])),
+        Arc::new(StringArray::from(vec![
+            "Q1", "Q1", "Q1", "Q1", "Q2", "Q2", "Q2", "Q2",
+            "Q3", "Q3", "Q3", "Q3"
+        ])),
     ])?;
     let file = File::create(path)?;
     let mut writer = ArrowWriter::try_new(file, schema, None)?;

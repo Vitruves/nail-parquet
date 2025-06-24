@@ -336,6 +336,68 @@ async fn calculate_correlation_matrix(
 	correlation_type: &CorrelationType,
 	digits: usize,
 ) -> NailResult<DataFrame> {
+	// First, calculate all pairwise correlations
+	let mut correlations = std::collections::HashMap::new();
+	
+	for (i, col1) in columns.iter().enumerate() {
+		for (j, col2) in columns.iter().enumerate() {
+			if i == j {
+				correlations.insert((col1.clone(), col2.clone()), 1.0);
+			} else if correlations.contains_key(&(col2.clone(), col1.clone())) {
+				// Use symmetry - correlation(A,B) = correlation(B,A)
+				let corr_val = correlations[&(col2.clone(), col1.clone())];
+				correlations.insert((col1.clone(), col2.clone()), corr_val);
+			} else {
+				// Calculate the correlation
+				let corr_sql = match correlation_type {
+					CorrelationType::Pearson => {
+						format!("SELECT CORR(\"{}\", \"{}\") as correlation FROM {}", col1, col2, table_name)
+					},
+					CorrelationType::Spearman => {
+						format!(
+							"WITH ranked_data AS (
+								SELECT 
+									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
+									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+								FROM {}
+							) 
+							SELECT CORR(rank1, rank2) as correlation FROM ranked_data",
+							col1, col2, table_name
+						)
+					},
+					CorrelationType::Kendall => {
+						format!(
+							"WITH ranked_data AS (
+								SELECT 
+									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
+									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+								FROM {}
+							) 
+							SELECT CORR(rank1, rank2) * 0.816 as correlation FROM ranked_data",
+							col1, col2, table_name
+						)
+					}
+				};
+				
+				let corr_df = ctx.sql(&corr_sql).await?;
+				let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
+				let corr_val = if let Some(batch) = batches.first() {
+					if batch.num_rows() > 0 {
+						let corr_array = batch.column(0).as_any().downcast_ref::<datafusion::arrow::array::Float64Array>().unwrap();
+						corr_array.value(0)
+					} else {
+						0.0
+					}
+				} else {
+					0.0
+				};
+				
+				correlations.insert((col1.clone(), col2.clone()), corr_val);
+			}
+		}
+	}
+	
+	// Now build the matrix rows
 	let mut correlation_queries = Vec::new();
 	
 	for col1 in columns {
@@ -343,22 +405,9 @@ async fn calculate_correlation_matrix(
 		row_values.push(format!("'{}' as variable", col1));
 		
 		for col2 in columns {
-			if col1 == col2 {
-				row_values.push(format!("1.0 as corr_with_{}", col2.replace(".", "_")));
-			} else {
-				let corr_expr = match correlation_type {
-					CorrelationType::Pearson => {
-						format!("ROUND((SELECT CORR(\"{}\", \"{}\") FROM {}), {})", col1, col2, table_name, digits)
-					},
-					CorrelationType::Spearman => {
-						format!("ROUND((SELECT CORR(\"{}\", \"{}\") FROM {}), {})", col1, col2, table_name, digits)
-					},
-					CorrelationType::Kendall => {
-						format!("ROUND((SELECT CORR(\"{}\", \"{}\") * 0.816 FROM {}), {})", col1, col2, table_name, digits)
-					}
-				};
-				row_values.push(format!("{} as corr_with_{}", corr_expr, col2.replace(".", "_")));
-			}
+			let corr_val = correlations[&(col1.clone(), col2.clone())];
+			let rounded_val = (corr_val * 10_f64.powi(digits as i32)).round() / 10_f64.powi(digits as i32);
+			row_values.push(format!("{} as corr_with_{}", rounded_val, col2.replace(".", "_")));
 		}
 		
 		let row_sql = format!("SELECT {}", row_values.join(", "));

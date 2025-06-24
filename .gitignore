@@ -1,3 +1,6 @@
 .DS_Store
 target/
 ALL_reviews_20241129_INN_formated.parquet
+.claude/
+.gitignore
+CLAUDE.md

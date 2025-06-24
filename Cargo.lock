@@ -2263,7 +2263,7 @@ dependencies = [
 
 [[package]]
 name = "nail-parquet"
-version = "1.4.1"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "arrow",

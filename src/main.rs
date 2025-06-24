@@ -40,10 +40,13 @@ async fn run() -> NailResult<()> {
 		commands::Commands::Shuffle(args) => commands::shuffle::execute(args).await,
 		commands::Commands::Sample(args) => commands::sample::execute(args).await,
 		commands::Commands::Dedup(args) => commands::dedup::execute(args).await,
+		commands::Commands::Binning(args) => commands::binning::execute(args).await,
+		commands::Commands::Pivot(args) => commands::pivot::execute(args).await,
 		commands::Commands::Merge(args) => commands::merge::execute(args).await,
 		commands::Commands::Append(args) => commands::append::execute(args).await,
 		commands::Commands::Split(args) => commands::split::execute(args).await,
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
+		commands::Commands::Optimize(args) => commands::optimize::execute(args).await,
 		commands::Commands::Update(args) => commands::update::execute(args).await,
 	}
 }

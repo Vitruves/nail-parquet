@@ -28,6 +28,8 @@ pub mod id;
 pub mod shuffle;
 pub mod sample;
 pub mod dedup;
+pub mod binning;
+pub mod pivot;
 
 // Data Combination
 pub mod merge;
@@ -36,6 +38,9 @@ pub mod split;
 
 // Format Conversion
 pub mod convert;
+
+// File Optimization
+pub mod optimize;
 
 // Utility
 pub mod update;
@@ -111,6 +116,12 @@ pub enum Commands {
 	#[command(about = "Remove duplicate rows or columns")]
 	Dedup(dedup::DedupArgs),
 	
+	#[command(about = "Bin continuous variables into categories")]
+	Binning(binning::BinningArgs),
+	
+	#[command(about = "Create pivot tables with aggregations")]
+	Pivot(pivot::PivotArgs),
+	
 	// Data Combination
 	#[command(about = "Join two datasets")]
 	#[command(next_help_heading = "Data Combination")]
@@ -126,6 +137,11 @@ pub enum Commands {
 	#[command(about = "Convert between file formats")]
 	#[command(next_help_heading = "Format Conversion")]
 	Convert(convert::ConvertArgs),
+	
+	// File Optimization
+	#[command(about = "Optimize Parquet files for better performance")]
+	#[command(next_help_heading = "File Optimization")]
+	Optimize(optimize::OptimizeArgs),
 	
 	// Utility
 	#[command(about = "Check for newer versions")]
