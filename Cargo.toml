@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.6.0"
+version = "1.6.1"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "A fast parquet utility written in Rust"
@@ -30,6 +30,13 @@ ratatui = { version = "0.24", default-features = false, features = ["crossterm"]
 calamine = "0.26"
 rust_xlsxwriter = "0.88"
 
+
+[profile.release]
+codegen-units = 1
+lto = "fat"
+opt-level = 3
+panic = "abort"
+
 [[bin]]
 name = "nail"
 path = "src/main.rs"
@@ -38,3 +45,5 @@ path = "src/main.rs"
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
+
+

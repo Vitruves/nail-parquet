@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(name = "nail")]
 #[command(about = "A fast data utility written in Rust")]
 #[command(long_about = "Nail, a parquet command-line tool for data manipulation, analysis, and format conversion.")]
-#[command(version = "1.6.0")]
+#[command(version = "1.6.1")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()
