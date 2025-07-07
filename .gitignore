@@ -5,3 +5,4 @@ ALL_reviews_20241129_INN_formated.parquet
 .gitignore
 CLAUDE.md
 .cursorignore
+.gitignore
