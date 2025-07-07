@@ -2,7 +2,8 @@
 
 A high-performance command-line utility for working with Parquet files, built with Rust and DataFusion.
 
-![nailedit](https://github.com/user-attachments/assets/75f4f5c4-4123-4366-be70-85ed86739750)
+![nail_parquet](https://github.com/user-attachments/assets/0251facf-0e9b-49d0-bbd4-5dd8a288997c)
+
 
 ## Features
 
