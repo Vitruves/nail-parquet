@@ -90,12 +90,36 @@ async fn align_schemas(df: &DataFrame, target_schema: &datafusion::common::DFSch
 		if let Ok(_current_field) = current_schema.field_with_name(None, target_name) {
 			select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, target_name)));
 		} else {
+			// For missing columns, use typed NULL values instead of default values
 			let null_expr = match target_field.data_type() {
-				datafusion::arrow::datatypes::DataType::Int64 => lit(0i64).alias(target_name),
-				datafusion::arrow::datatypes::DataType::Float64 => lit(0.0f64).alias(target_name),
-				datafusion::arrow::datatypes::DataType::Utf8 => lit("").alias(target_name),
-				datafusion::arrow::datatypes::DataType::Boolean => lit(false).alias(target_name),
-				_ => lit("").alias(target_name),
+				datafusion::arrow::datatypes::DataType::Int64 => {
+					lit(datafusion::scalar::ScalarValue::Int64(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Float64 => {
+					lit(datafusion::scalar::ScalarValue::Float64(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Int32 => {
+					lit(datafusion::scalar::ScalarValue::Int32(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Float32 => {
+					lit(datafusion::scalar::ScalarValue::Float32(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Utf8 => {
+					lit(datafusion::scalar::ScalarValue::Utf8(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Boolean => {
+					lit(datafusion::scalar::ScalarValue::Boolean(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Date32 => {
+					lit(datafusion::scalar::ScalarValue::Date32(None)).alias(target_name)
+				},
+				datafusion::arrow::datatypes::DataType::Date64 => {
+					lit(datafusion::scalar::ScalarValue::Date64(None)).alias(target_name)
+				},
+				_ => {
+					// For unknown types, try to create a null of the correct type
+					lit(datafusion::scalar::ScalarValue::try_from(target_field.data_type()).unwrap_or(datafusion::scalar::ScalarValue::Null)).alias(target_name)
+				},
 			};
 			select_exprs.push(null_expr);
 		}

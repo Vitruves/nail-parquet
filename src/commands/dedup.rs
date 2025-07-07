@@ -139,13 +139,25 @@ async fn deduplicate_columns(df: &DataFrame) -> NailResult<DataFrame> {
 	let schema = df.schema();
 	let mut unique_columns = Vec::new();
 	let mut seen_names = HashSet::new();
+	let mut duplicates = Vec::new();
 	
 	for field in schema.fields() {
 		let field_name = field.name();
 		if !seen_names.contains(field_name) {
 			seen_names.insert(field_name.clone());
 			unique_columns.push(Expr::Column(datafusion::common::Column::new(None::<String>, field_name)));
+		} else {
+			duplicates.push(field_name.clone());
 		}
+	}
+	
+	// Error out if there are duplicate column names to prevent silent data loss
+	if !duplicates.is_empty() {
+		return Err(NailError::InvalidArgument(format!(
+			"Duplicate column names found: {:?}. This could result in data loss. \
+			Please use the 'rename' command to resolve column name conflicts before deduplicating.",
+			duplicates
+		)));
 	}
 	
 	let result = df.clone().select(unique_columns)?;

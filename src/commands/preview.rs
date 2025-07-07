@@ -99,17 +99,28 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
     Ok(())
 }
 
-async fn execute_interactive(_args: PreviewArgs, df: DataFrame, _total_rows: usize) -> NailResult<()> {
-    // Collect all data for interactive browsing
-    let batches = df.clone().collect().await?;
-    
-    if batches.is_empty() {
+async fn execute_interactive(args: PreviewArgs, df: DataFrame, total_rows: usize) -> NailResult<()> {
+    if total_rows == 0 {
         println!("No data to display");
         return Ok(());
     }
     
-    // Calculate total records
-    let total_records: usize = batches.iter().map(|b| b.num_rows()).sum();
+    // For interactive mode, we'll use a paging approach to avoid loading everything into memory
+    // Start with the first page of data
+    const PAGE_SIZE: usize = 1000; // Load data in chunks of 1000 rows
+    let mut current_page = 0;
+    let total_pages = (total_rows + PAGE_SIZE - 1) / PAGE_SIZE;
+    
+    // Load first page
+    let first_page_df = df.clone().limit(0, Some(PAGE_SIZE.min(total_rows)))?;
+    let mut current_batches = first_page_df.collect().await?;
+    
+    if current_batches.is_empty() {
+        println!("No data to display");
+        return Ok(());
+    }
+    
+    let total_records = total_rows;
     
     // Interactive viewer state
     let mut current_record = 0;
@@ -119,7 +130,7 @@ async fn execute_interactive(_args: PreviewArgs, df: DataFrame, _total_rows: usi
     enable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
     execute!(io::stdout(), EnterAlternateScreen, Hide).map_err(|e| crate::error::NailError::Io(e))?;
     
-    let result = run_ratatui_viewer(&batches, total_records, &mut current_record, &mut row_offset);
+    let result = run_ratatui_viewer_paged(&df, &mut current_batches, &mut current_page, total_pages, PAGE_SIZE, total_records, &mut current_record, &mut row_offset, &args).await;
     
     // Cleanup terminal
     execute!(io::stdout(), Show, LeaveAlternateScreen).map_err(|e| crate::error::NailError::Io(e))?;
@@ -139,11 +150,16 @@ const FIELD_COLORS_TUI: [Color; 8] = [
     Color::LightYellow,
 ];
 
-fn run_ratatui_viewer(
-    batches: &[datafusion::arrow::record_batch::RecordBatch],
+async fn run_ratatui_viewer_paged(
+    df: &DataFrame,
+    current_batches: &mut Vec<datafusion::arrow::record_batch::RecordBatch>,
+    current_page: &mut usize,
+    _total_pages: usize,
+    page_size: usize,
     total_records: usize,
     current_record: &mut usize,
     row_offset: &mut usize,
+    _args: &PreviewArgs,
 ) -> NailResult<()> {
     let mut stdout = io::stdout();
     enable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
@@ -153,6 +169,19 @@ fn run_ratatui_viewer(
     let mut terminal = Terminal::new(backend).map_err(|e| crate::error::NailError::Io(e))?;
 
     loop {
+        // Check if we need to load a new page for the current record
+        let needed_page = *current_record / page_size;
+        if needed_page != *current_page {
+            *current_page = needed_page;
+            let offset = needed_page * page_size;
+            let limit = page_size.min(total_records - offset);
+            
+            if offset < total_records {
+                let page_df = df.clone().limit(offset, Some(limit))?;
+                *current_batches = page_df.collect().await.map_err(|e| crate::error::NailError::DataFusion(e))?;
+            }
+        }
+
         terminal.draw(|f| {
             let size = f.size();
             let chunks = Layout::default()
@@ -163,18 +192,24 @@ fn run_ratatui_viewer(
                 ])
                 .split(size);
 
-            // build table rows for current record
+            // build table rows for current record within the current page
+            let record_in_page = *current_record % page_size;
             let (batch_idx, row_idx) = {
-                let mut idx = *current_record;
+                let mut idx = record_in_page;
                 let mut b_idx = 0;
-                for b in batches {
+                for b in current_batches.iter() {
                     if idx < b.num_rows() { break; }
                     idx -= b.num_rows();
                     b_idx += 1;
                 }
                 (b_idx, idx)
             };
-            let batch = &batches[batch_idx];
+            
+            if batch_idx >= current_batches.len() {
+                return; // No data available
+            }
+            
+            let batch = &current_batches[batch_idx];
             let schema = batch.schema();
             let content_iter = schema.fields().iter().enumerate().skip(*row_offset);
             let lines: Vec<Line> = content_iter.map(|(col_idx, field)| {
@@ -213,17 +248,23 @@ fn run_ratatui_viewer(
         // handle keys
         if let Event::Key(ke) = event::read().map_err(|e| crate::error::NailError::Io(e))? {
             // Get schema for key handling
+            let record_in_page = *current_record % page_size;
             let (batch_idx, _) = {
-                let mut idx = *current_record;
+                let mut idx = record_in_page;
                 let mut b_idx = 0;
-                for b in batches {
+                for b in current_batches.iter() {
                     if idx < b.num_rows() { break; }
                     idx -= b.num_rows();
                     b_idx += 1;
                 }
                 (b_idx, idx)
             };
-            let batch = &batches[batch_idx];
+            
+            if batch_idx >= current_batches.len() {
+                continue; // Skip if no data available
+            }
+            
+            let batch = &current_batches[batch_idx];
             let schema = batch.schema();
             
             match ke {

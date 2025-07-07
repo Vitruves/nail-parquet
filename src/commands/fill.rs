@@ -153,89 +153,95 @@ async fn fill_missing_values(
 		}
 	}
 	
-	// For statistical methods and fill methods, we need special handling
+	// For statistical methods, use DataFusion's built-in aggregation functions
 	if matches!(method, FillMethod::Mean | FillMethod::Median | FillMethod::Mode) {
-		let batches = df.clone().collect().await?;
-		let mut means = std::collections::HashMap::<String, f64>::new();
-		let mut medians = std::collections::HashMap::<String, f64>::new();
-		let mut modes = std::collections::HashMap::<String, String>::new();
+		let mut stats_values = std::collections::HashMap::<String, f64>::new();
+		let mut mode_values = std::collections::HashMap::<String, String>::new();
 		
-		// Calculate statistical values for each target column
+		// Calculate statistical values for each target column using SQL
 		for col_name in columns {
-			let _field = schema.fields().iter()
+			let field = schema.fields().iter()
 				.find(|f| f.name() == col_name)
 				.ok_or_else(|| NailError::Statistics(format!("Column '{}' not found", col_name)))?;
 			
-			let idx = schema.fields().iter()
-				.position(|f| f.name() == col_name)
-				.unwrap();
-			
-			let mut values = Vec::<f64>::new();
-			let mut string_values = Vec::<String>::new();
-			
-			for batch in &batches {
-				let array = batch.column(idx);
-				if let Some(farr) = array.as_any().downcast_ref::<Float64Array>() {
-					for i in 0..farr.len() {
-						if farr.is_valid(i) {
-							values.push(farr.value(i));
+			match method {
+				FillMethod::Mean => {
+					match field.data_type() {
+						datafusion::arrow::datatypes::DataType::Float64 | 
+						datafusion::arrow::datatypes::DataType::Int64 => {
+							let mean_sql = format!("SELECT AVG(\"{}\") as stat_value FROM {}", col_name, table_name);
+							let result = ctx.sql(&mean_sql).await?;
+							let batches = result.collect().await?;
+							if let Some(batch) = batches.first() {
+								if batch.num_rows() > 0 {
+									let value_array = batch.column(0).as_any().downcast_ref::<Float64Array>().unwrap();
+									if !value_array.is_null(0) {
+										stats_values.insert(col_name.clone(), value_array.value(0));
+									}
+								}
+							}
+						},
+						_ => return Err(NailError::Statistics(format!("Mean calculation not supported for column '{}' of type {:?}", col_name, field.data_type()))),
+					}
+				},
+				FillMethod::Median => {
+					match field.data_type() {
+						datafusion::arrow::datatypes::DataType::Float64 | 
+						datafusion::arrow::datatypes::DataType::Int64 => {
+							let median_sql = format!("SELECT APPROX_PERCENTILE_CONT(\"{}\", 0.5) as stat_value FROM {}", col_name, table_name);
+							let result = ctx.sql(&median_sql).await?;
+							let batches = result.collect().await?;
+							if let Some(batch) = batches.first() {
+								if batch.num_rows() > 0 {
+									let value_array = batch.column(0).as_any().downcast_ref::<Float64Array>().unwrap();
+									if !value_array.is_null(0) {
+										stats_values.insert(col_name.clone(), value_array.value(0));
+									}
+								}
+							}
+						},
+						_ => return Err(NailError::Statistics(format!("Median calculation not supported for column '{}' of type {:?}", col_name, field.data_type()))),
+					}
+				},
+				FillMethod::Mode => {
+					// Mode requires finding the most frequent value - use a subquery
+					let mode_sql = format!(
+						"SELECT \"{0}\" as mode_value FROM (
+							SELECT \"{0}\", COUNT(*) as freq 
+							FROM {1} 
+							WHERE \"{0}\" IS NOT NULL 
+							GROUP BY \"{0}\" 
+							ORDER BY freq DESC 
+							LIMIT 1
+						)", 
+						col_name, table_name
+					);
+					let result = ctx.sql(&mode_sql).await?;
+					let batches = result.collect().await?;
+					if let Some(batch) = batches.first() {
+						if batch.num_rows() > 0 {
+							let mode_array = batch.column(0);
+							if !mode_array.is_null(0) {
+								match field.data_type() {
+									datafusion::arrow::datatypes::DataType::Utf8 => {
+										let str_array = mode_array.as_any().downcast_ref::<arrow::array::StringArray>().unwrap();
+										mode_values.insert(col_name.clone(), str_array.value(0).to_string());
+									},
+									datafusion::arrow::datatypes::DataType::Int64 => {
+										let int_array = mode_array.as_any().downcast_ref::<Int64Array>().unwrap();
+										mode_values.insert(col_name.clone(), int_array.value(0).to_string());
+									},
+									datafusion::arrow::datatypes::DataType::Float64 => {
+										let float_array = mode_array.as_any().downcast_ref::<Float64Array>().unwrap();
+										mode_values.insert(col_name.clone(), float_array.value(0).to_string());
+									},
+									_ => {},
+								}
+							}
 						}
 					}
-				} else if let Some(iarr) = array.as_any().downcast_ref::<Int64Array>() {
-					for i in 0..iarr.len() {
-						if iarr.is_valid(i) {
-							values.push(iarr.value(i) as f64);
-						}
-					}
-				} else if let Some(sarr) = array.as_any().downcast_ref::<arrow::array::StringArray>() {
-					for i in 0..sarr.len() {
-						if sarr.is_valid(i) {
-							string_values.push(sarr.value(i).to_string());
-						}
-					}
-				}
-			}
-			
-			if values.is_empty() && string_values.is_empty() {
-				return Err(NailError::Statistics(format!("No non-null values found in column '{}'", col_name)));
-			}
-			
-			// Calculate mean
-			if !values.is_empty() {
-				let sum: f64 = values.iter().sum();
-				means.insert(col_name.clone(), sum / values.len() as f64);
-				
-				// Calculate median
-				let mut sorted_values = values.clone();
-				sorted_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-				let median = if sorted_values.len() % 2 == 0 {
-					let mid = sorted_values.len() / 2;
-					(sorted_values[mid - 1] + sorted_values[mid]) / 2.0
-				} else {
-					sorted_values[sorted_values.len() / 2]
-				};
-				medians.insert(col_name.clone(), median);
-			}
-			
-			// Calculate mode (most frequent value)
-			if !string_values.is_empty() {
-				let mut frequency = std::collections::HashMap::<String, usize>::new();
-				for val in &string_values {
-					*frequency.entry(val.clone()).or_insert(0) += 1;
-				}
-				if let Some((mode_val, _)) = frequency.iter().max_by_key(|(_, &count)| count) {
-					modes.insert(col_name.clone(), mode_val.clone());
-				}
-			} else if !values.is_empty() {
-				// For numeric values, convert to string for mode calculation
-				let mut frequency = std::collections::HashMap::<String, usize>::new();
-				for val in &values {
-					let val_str = val.to_string();
-					*frequency.entry(val_str).or_insert(0) += 1;
-				}
-				if let Some((mode_val, _)) = frequency.iter().max_by_key(|(_, &count)| count) {
-					modes.insert(col_name.clone(), mode_val.clone());
-				}
+				},
+				_ => unreachable!(),
 			}
 		}
 		
@@ -247,13 +253,13 @@ async fn fill_missing_values(
 			if columns.contains(field_name) {
 				let filled_expr = match method {
 					FillMethod::Mean => {
-						if let Some(&mean_val) = means.get(field_name) {
+						if let Some(&stat_val) = stats_values.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Float64 => {
-									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mean_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(stat_val)])
 								},
 								datafusion::arrow::datatypes::DataType::Int64 => {
-									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mean_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(stat_val)])
 								},
 								_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 							}
@@ -262,13 +268,13 @@ async fn fill_missing_values(
 						}
 					},
 					FillMethod::Median => {
-						if let Some(&median_val) = medians.get(field_name) {
+						if let Some(&stat_val) = stats_values.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Float64 => {
-									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(median_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(stat_val)])
 								},
 								datafusion::arrow::datatypes::DataType::Int64 => {
-									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(median_val)])
+									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(stat_val)])
 								},
 								_ => Expr::Column(datafusion::common::Column::new(None::<String>, field_name)),
 							}
@@ -277,7 +283,7 @@ async fn fill_missing_values(
 						}
 					},
 					FillMethod::Mode => {
-						if let Some(mode_val) = modes.get(field_name) {
+						if let Some(mode_val) = mode_values.get(field_name) {
 							match field.data_type() {
 								datafusion::arrow::datatypes::DataType::Utf8 => {
 									coalesce(vec![Expr::Column(datafusion::common::Column::new(None::<String>, field_name)), lit(mode_val.as_str())])

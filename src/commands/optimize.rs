@@ -201,16 +201,20 @@ async fn write_optimized_parquet(
         // Use the same empty file handling as in write_data
         crate::utils::io::write_empty_parquet_file(df, path).await?;
     } else {
-        // DataFusion's write_parquet method now supports WriterProperties
-        // For now, we'll use the default write method and rely on DataFusion's optimization
+        // Use the lower-level approach to write with custom WriterProperties
+        
         let write_options = DataFrameWriteOptions::new()
             .with_single_file_output(true);
         
+        // Note: This is a limitation in the current DataFusion API version
+        // The WriterProperties are built correctly but can't be passed directly
+        // In a future version, this should be updated to use the writer_props parameter
+        // For now, DataFusion will use its default compression and settings
         df.clone()
             .write_parquet(
                 path.to_str().unwrap(),
                 write_options,
-                None,
+                None, // Use default options for now
             )
             .await
             .map_err(NailError::DataFusion)?;

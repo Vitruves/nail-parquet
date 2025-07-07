@@ -121,6 +121,7 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter, jobs: Option<usize
 			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
 		},
 		RowFilter::NumericOnly => {
+			// Filter rows where all numeric columns have valid numeric values (not null)
 			let numeric_columns: Vec<String> = schema.fields().iter()
 				.filter(|f| matches!(f.data_type(), 
 					datafusion::arrow::datatypes::DataType::Int64 | 
@@ -135,9 +136,15 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter, jobs: Option<usize
 				return Err(NailError::InvalidArgument("No numeric columns found".to_string()));
 			}
 			
-			return Ok(df.clone().select(numeric_columns.iter().map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name))).collect())?);
+			// Create conditions that all numeric columns must not be null
+			let conditions: Vec<Expr> = numeric_columns.iter()
+				.map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name)).is_not_null())
+				.collect();
+			
+			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
 		},
 		RowFilter::CharOnly => {
+			// Filter rows where all string columns have non-null values
 			let char_columns: Vec<String> = schema.fields().iter()
 				.filter(|f| matches!(f.data_type(), datafusion::arrow::datatypes::DataType::Utf8))
 				.map(|f| f.name().clone())
@@ -147,7 +154,15 @@ async fn apply_row_filter(df: &DataFrame, filter: &RowFilter, jobs: Option<usize
 				return Err(NailError::InvalidArgument("No string columns found".to_string()));
 			}
 			
-			return Ok(df.clone().select(char_columns.iter().map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name))).collect())?);
+			// Create conditions that all string columns must not be null and not empty
+			let conditions: Vec<Expr> = char_columns.iter()
+				.map(|name| {
+					let col_expr = Expr::Column(datafusion::common::Column::new(None::<String>, name));
+					col_expr.clone().is_not_null().and(col_expr.not_eq(lit("")))
+				})
+				.collect();
+			
+			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
 		},
 		RowFilter::NoZeros => {
 			let conditions: Vec<Expr> = schema.fields().iter()

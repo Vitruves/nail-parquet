@@ -138,23 +138,92 @@ async fn search_return_row_numbers(
 	exact: bool,
 	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-	
-	// First, get matching rows using the same logic as search_return_matching_rows
-	let matching_df = search_return_matching_rows(df, search_value, columns, ignore_case, exact, jobs).await?;
-	
-	// Now we need to add row numbers to the matching results
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
-	ctx.register_table("matching", matching_df.clone().into_view())?;
+	let table_name = "temp_table";
+	ctx.register_table(table_name, df.clone().into_view())?;
 	
-	// Use SQL to add row numbers and metadata
-	let sql = format!(
-		"SELECT ROW_NUMBER() OVER() as row_number, '{}' as search_value, '{}' as matched_columns 
-		 FROM matching",
-		search_value.replace("'", "''"), // Escape single quotes
-		columns.join(",")
+	// Build search conditions the same way as in search_return_matching_rows
+	let mut conditions = Vec::new();
+	
+	for column in columns {
+		let field = df.schema().field_with_name(None, column)
+			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
+		
+		let col_expr = col(column);
+		
+		let condition = match field.data_type() {
+			datafusion::arrow::datatypes::DataType::Utf8 => {
+				if ignore_case {
+					let lower_col = Expr::ScalarFunction(ScalarFunction::new_udf(
+						datafusion::functions::string::lower(),
+						vec![col_expr.clone()],
+					));
+					
+					let search_lit = lit(search_value.to_lowercase());
+					
+					if exact {
+						lower_col.eq(search_lit)
+					} else {
+						let pattern = lit(format!("%{}%", search_value.to_lowercase()));
+						lower_col.like(pattern)
+					}
+				} else {
+					if exact {
+						col_expr.clone().eq(lit(search_value.to_string()))
+					} else {
+						let pattern = lit(format!("%{}%", search_value));
+						col_expr.clone().like(pattern)
+					}
+				}
+			},
+			datafusion::arrow::datatypes::DataType::Int64 | 
+			datafusion::arrow::datatypes::DataType::Float64 => {
+				if let Ok(num_value) = search_value.parse::<f64>() {
+					if exact {
+						col_expr.eq(lit(num_value))
+					} else {
+						let cast_expr = col_expr.cast_to(&datafusion::arrow::datatypes::DataType::Utf8, df.schema())?;
+						let pattern = lit(format!("%{}%", search_value));
+						cast_expr.like(pattern)
+					}
+				} else {
+					continue;
+				}
+			},
+			_ => continue,
+		};
+		
+		conditions.push(condition);
+	}
+	
+	if conditions.is_empty() {
+		return Err(NailError::InvalidArgument("No searchable columns found".to_string()));
+	}
+	
+	// Combine all conditions with OR
+	let combined_filter = conditions.into_iter().reduce(|acc, expr| acc.or(expr)).unwrap();
+	
+	// First add row numbers to the original data, THEN filter
+	// This preserves the original row positions
+	
+	// Create the numbered dataframe first
+	let numbered_sql = format!(
+		"SELECT ROW_NUMBER() OVER() as row_number, * FROM {}",
+		table_name
 	);
+	let numbered_df = ctx.sql(&numbered_sql).await?;
+	ctx.register_table("numbered_data", numbered_df.into_view())?;
 	
-	let result = ctx.sql(&sql).await?;
+	// Apply the filter to the numbered data
+	let filtered_df = ctx.table("numbered_data").await?.filter(combined_filter)?;
+	
+	// Select only the row number and metadata
+	let result = filtered_df.select(vec![
+		col("row_number"),
+		lit(search_value).alias("search_value"),
+		lit(columns.join(",")).alias("matched_columns"),
+	])?;
+	
 	Ok(result)
 }
 

@@ -3,7 +3,6 @@ use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
-use datafusion::arrow::array::Array;
 use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
@@ -25,28 +24,23 @@ pub async fn execute(args: SizeArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Analyzing size of: {}", args.common.input.display()));
 	
 	let df = read_data(&args.common.input).await?;
-	let batches = df.clone().collect().await?;
 	let schema = df.schema();
 	
 	let row_count = df.clone().count().await?;
 	let col_count = schema.fields().len();
 	
+	// For memory usage calculation, we'll use an approximation based on schema and row count
+	// rather than loading the entire dataset into memory
 	let mut total_memory = 0usize;
 	let mut column_sizes = Vec::new();
 	
-	for batch in &batches {
-		for (col_idx, field) in schema.fields().iter().enumerate() {
-			let column = batch.column(col_idx);
-			let size = column.get_buffer_memory_size();
-			total_memory += size;
-			
-			if args.columns {
-				if let Some(existing) = column_sizes.iter_mut().find(|(name, _)| name == field.name()) {
-					existing.1 += size;
-				} else {
-					column_sizes.push((field.name().clone(), size));
-				}
-			}
+	// Estimate memory usage based on data types and row count
+	for field in schema.fields().iter() {
+		let estimated_size = estimate_column_memory_size(field.data_type(), row_count);
+		total_memory += estimated_size;
+		
+		if args.columns {
+			column_sizes.push((field.name().clone(), estimated_size));
 		}
 	}
 	
@@ -85,7 +79,7 @@ pub async fn execute(args: SizeArgs) -> NailResult<()> {
 				}
 			}
 			
-			size_data.push(format!("'Memory usage' as metric, '{}' as value", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) }));
+			size_data.push(format!("'Estimated uncompressed memory usage' as metric, '{}' as value", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) }));
 			
 			let sql = format!("SELECT {} {}", 
 				size_data.first().unwrap(),
@@ -128,13 +122,55 @@ pub async fn execute(args: SizeArgs) -> NailResult<()> {
 				}
 			}
 			
-			println!("Memory usage: {}", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) });
+			println!("Estimated uncompressed memory usage: {}", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) });
 		}
 	}
 	
 	Ok(())
 }
 
+
+fn estimate_column_memory_size(data_type: &datafusion::arrow::datatypes::DataType, row_count: usize) -> usize {
+	use datafusion::arrow::datatypes::DataType;
+	
+	match data_type {
+		DataType::Boolean => row_count / 8 + 1, // 1 bit per value, rounded up
+		DataType::Int8 | DataType::UInt8 => row_count,
+		DataType::Int16 | DataType::UInt16 => row_count * 2,
+		DataType::Int32 | DataType::UInt32 | DataType::Float32 => row_count * 4,
+		DataType::Int64 | DataType::UInt64 | DataType::Float64 => row_count * 8,
+		DataType::Date32 => row_count * 4,
+		DataType::Date64 | DataType::Timestamp(_, _) => row_count * 8,
+		DataType::Utf8 => {
+			// Estimate average string length as 20 characters
+			// Plus overhead for string length tracking
+			row_count * (20 + 4)
+		},
+		DataType::LargeUtf8 => {
+			// Similar to Utf8 but with 8-byte length tracking
+			row_count * (20 + 8)
+		},
+		DataType::Binary => {
+			// Estimate average binary length as 50 bytes
+			row_count * (50 + 4)
+		},
+		DataType::LargeBinary => {
+			row_count * (50 + 8)
+		},
+		DataType::List(_) | DataType::LargeList(_) => {
+			// Very rough estimate for lists
+			row_count * 100
+		},
+		DataType::Struct(_) => {
+			// Rough estimate for structs
+			row_count * 50
+		},
+		_ => {
+			// Default estimate for unknown types
+			row_count * 8
+		}
+	}
+}
 
 fn human_bytes(bytes: usize) -> String {
 	const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
