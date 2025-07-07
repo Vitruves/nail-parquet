@@ -262,6 +262,7 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
             OutputFormat::Json => crate::utils::FileFormat::Json,
             OutputFormat::Csv => crate::utils::FileFormat::Csv,
             OutputFormat::Parquet => crate::utils::FileFormat::Parquet,
+            OutputFormat::Xlsx => crate::utils::FileFormat::Excel,
             OutputFormat::Text => crate::utils::FileFormat::Parquet,
         });
         write_data(&result_df, output_path, file_format.as_ref()).await?;

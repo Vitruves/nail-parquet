@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.5.0"
+version = "1.5.1"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "A fast parquet utility written in Rust"
@@ -10,46 +10,23 @@ repository = "https://github.com/Vitruves/nail-parquet"
 [dependencies]
 clap = { version = "4.5", features = ["derive", "color"] }
 tokio = { version = "1.0", features = ["full"] }
-anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
-
 datafusion = "42.2"
-datafusion-expr = "42.2"
-datafusion-sql = "42.2"
-datafusion-common = "42.2"
-
 arrow = "53.4"
-arrow-array = "53.4"
 arrow-schema = "53.4"
-arrow-cast = "53.4"
-arrow-select = "53.4"
-arrow-json = "53.4"
-arrow-arith = "53.4"
 parquet = "53.4"
-
 rand = "0.8"
 statrs = "0.17"
 regex = "1"
-unicode-width = "0.2"
-rayon = "1.10"
 futures = "0.3"
 num_cpus = "1.16"
-tabled = "0.16"
-colored = "2.1"
-indicatif = "0.17"
-itertools = "0.13"
-uuid = { version = "1.10", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 term_size = "0.3"
-
-# Terminal interaction for interactive preview
 crossterm = "0.27"
 ratatui = { version = "0.24", default-features = false, features = ["crossterm"] }
-
-# Excel file support
 calamine = "0.26"
 rust_xlsxwriter = "0.88"
 

@@ -42,11 +42,13 @@ pub async fn display_dataframe(
 				Some(OutputFormat::Json) => Some(FileFormat::Json),
 				Some(OutputFormat::Csv) => Some(FileFormat::Csv),
 				Some(OutputFormat::Parquet) => Some(FileFormat::Parquet),
+				Some(OutputFormat::Xlsx) => Some(FileFormat::Excel),
 				Some(OutputFormat::Text) | None => {
 					match path.extension().and_then(|s| s.to_str()) {
 						Some("json") => Some(FileFormat::Json),
 						Some("csv") => Some(FileFormat::Csv),
 						Some("parquet") => Some(FileFormat::Parquet),
+						Some("xlsx") => Some(FileFormat::Excel),
 						_ => Some(FileFormat::Parquet),
 					}
 				},

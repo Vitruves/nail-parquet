@@ -103,6 +103,7 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
             crate::cli::OutputFormat::Json => crate::utils::FileFormat::Json,
             crate::cli::OutputFormat::Csv => crate::utils::FileFormat::Csv,
             crate::cli::OutputFormat::Parquet => crate::utils::FileFormat::Parquet,
+            crate::cli::OutputFormat::Xlsx => crate::utils::FileFormat::Excel,
             crate::cli::OutputFormat::Text => crate::utils::FileFormat::Csv, // Default to CSV for text
         });
         
