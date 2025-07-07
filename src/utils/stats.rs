@@ -17,9 +17,14 @@ pub enum CorrelationType {
 }
 
 pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResult<Vec<String>> {
-	let patterns: Vec<&str> = pattern.split(',').map(|s| s.trim()).collect();
+	let patterns: Vec<&str> = pattern.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
 	let mut selected = Vec::new();
 	let mut not_found = Vec::new();
+	
+	// If no valid patterns after filtering, return empty list
+	if patterns.is_empty() {
+		return Ok(Vec::new());
+	}
 	
 	for pattern in &patterns {
 		let mut found = false;
@@ -336,11 +341,15 @@ async fn calculate_correlation_matrix(
 	correlation_type: &CorrelationType,
 	digits: usize,
 ) -> NailResult<DataFrame> {
+	// Sort columns for deterministic order
+	let mut sorted_columns = columns.to_vec();
+	sorted_columns.sort();
+	
 	// First, calculate all pairwise correlations
 	let mut correlations = std::collections::HashMap::new();
 	
-	for (i, col1) in columns.iter().enumerate() {
-		for (j, col2) in columns.iter().enumerate() {
+	for (i, col1) in sorted_columns.iter().enumerate() {
+		for (j, col2) in sorted_columns.iter().enumerate() {
 			if i == j {
 				correlations.insert((col1.clone(), col2.clone()), 1.0);
 			} else if correlations.contains_key(&(col2.clone(), col1.clone())) {
@@ -400,11 +409,11 @@ async fn calculate_correlation_matrix(
 	// Now build the matrix rows
 	let mut correlation_queries = Vec::new();
 	
-	for col1 in columns {
+	for col1 in &sorted_columns {
 		let mut row_values = Vec::new();
 		row_values.push(format!("'{}' as variable", col1));
 		
-		for col2 in columns {
+		for col2 in &sorted_columns {
 			let corr_val = correlations[&(col1.clone(), col2.clone())];
 			let rounded_val = (corr_val * 10_f64.powi(digits as i32)).round() / 10_f64.powi(digits as i32);
 			row_values.push(format!("{} as corr_with_{}", rounded_val, col2.replace(".", "_")));

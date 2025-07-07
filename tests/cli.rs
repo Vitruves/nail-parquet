@@ -410,7 +410,20 @@ mod format_and_analysis_tests {
 		let matrix_lines: Vec<&str> = matrix_content.trim().lines().collect();
 		assert_eq!(matrix_lines.len(), 2);
 		let first_row: Value = serde_json::from_str(matrix_lines[0]).unwrap();
-		assert!((first_row["corr_with_id"].as_f64().unwrap() - 1.0).abs() < 0.01);
+		
+		// Debug output for when the test fails
+		let corr_with_id = first_row["corr_with_id"].as_f64().unwrap();
+		let diff = (corr_with_id - 1.0).abs();
+		if diff >= 0.01 {
+			eprintln!("Correlation test failure debug:");
+			eprintln!("Matrix content: {}", matrix_content);
+			eprintln!("First row: {}", first_row);
+			eprintln!("corr_with_id value: {}", corr_with_id);
+			eprintln!("Difference from 1.0: {}", diff);
+			eprintln!("Available keys: {:?}", first_row.as_object().unwrap().keys().collect::<Vec<_>>());
+		}
+		
+		assert!(diff < 0.01, "corr_with_id ({}) is not close enough to 1.0 (diff: {})", corr_with_id, diff);
 	}
 
 	#[test]

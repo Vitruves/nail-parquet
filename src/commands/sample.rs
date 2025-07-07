@@ -6,8 +6,7 @@ use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
-use datafusion::arrow::array::{StringArray, DictionaryArray, Array};
-use datafusion::arrow::datatypes::UInt32Type;
+use datafusion::arrow::array::{StringArray, Array};
 
 #[derive(Args, Clone)]
 pub struct SampleArgs {
@@ -71,51 +70,76 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 
 async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
 	let total_rows = df.clone().count().await?;
-	let mut rng = match seed {
-		Some(s) => StdRng::seed_from_u64(s),
-		None => StdRng::from_entropy(),
-	};
-	
-	let mut indices: Vec<usize> = (0..total_rows).collect();
-	indices.shuffle(&mut rng);
-	indices.truncate(n);
-	indices.sort();
-	
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
-	let indices_str = indices.iter()
-		.map(|&i| (i + 1).to_string())
-		.collect::<Vec<_>>()
-		.join(",");
-	
-	// Get the original column names and quote them to preserve case
-	let original_columns: Vec<String> = df.schema().fields().iter()
-		.map(|f| format!("\"{}\"", f.name()))
-		.collect();
-	
-	let sql = format!(
-		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
-		original_columns.join(", "),
-		original_columns.join(", "),
-		table_name, 
-		indices_str
-	);
-	
-	let result = ctx.sql(&sql).await?;
-	
-	Ok(result)
+	// For very large datasets, use a more scalable approach
+	if total_rows > 100_000 || n > 10_000 {
+		// Use DataFusion's TABLESAMPLE or a hash-based approach
+		let sample_ratio = n as f64 / total_rows as f64;
+		
+		if let Some(s) = seed {
+			// Use deterministic hash-based sampling
+			let sql = format!(
+				"WITH numbered AS (
+					SELECT *, ROW_NUMBER() OVER() as rn FROM {}
+				)
+				SELECT * FROM numbered 
+				WHERE ABS(HASH(CAST(rn AS VARCHAR) || '{}')) % {} < {}
+				ORDER BY rn
+				LIMIT {}",
+				table_name, s, total_rows, (total_rows as f64 * sample_ratio) as usize, n
+			);
+			let result = ctx.sql(&sql).await?;
+			Ok(result)
+		} else {
+			// Use ORDER BY RANDOM() for true randomness
+			let sql = format!(
+				"SELECT * FROM {} ORDER BY RANDOM() LIMIT {}",
+				table_name, n
+			);
+			let result = ctx.sql(&sql).await?;
+			Ok(result)
+		}
+	} else {
+		// For smaller datasets, use the indices approach
+		let mut rng = match seed {
+			Some(s) => StdRng::seed_from_u64(s),
+			None => StdRng::from_entropy(),
+		};
+		
+		let mut indices: Vec<usize> = (0..total_rows).collect();
+		indices.shuffle(&mut rng);
+		indices.truncate(n);
+		indices.sort();
+		
+		// Create a temporary table with the sampled indices
+		let values_rows: Vec<String> = indices.iter()
+			.map(|&i| format!("({})", i + 1))
+			.collect();
+		
+		let values_sql = values_rows.join(", ");
+		let sql = format!(
+			"WITH sample_indices(rn) AS (VALUES {}) 
+			 SELECT t.* FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) t 
+			 JOIN sample_indices si ON t.rn = si.rn",
+			values_sql, table_name
+		);
+		
+		let result = ctx.sql(&sql).await?;
+		Ok(result)
+	}
 }
 
 async fn sample_stratified(
     df: &DataFrame,
     n: usize,
     stratify_col: &str,
-    _seed: Option<u64>,
+    seed: Option<u64>,
     jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     let ctx = crate::utils::create_context_with_jobs(jobs).await?;
     let table_name = "temp_table";
     ctx.register_table(table_name, df.clone().into_view())?;
@@ -135,97 +159,111 @@ async fn sample_stratified(
             ))
         })?;
 
-    // First, let's try to get distinct values using SQL which is more robust
-    let distinct_sql = format!(
-        "SELECT DISTINCT {} FROM {} WHERE {} IS NOT NULL",
-        actual_col_name, table_name, actual_col_name
+    // Get counts for each category
+    let count_sql = format!(
+        "SELECT \"{}\" as category, COUNT(*) as count 
+         FROM {} 
+         WHERE \"{}\" IS NOT NULL 
+         GROUP BY \"{}\"",
+        actual_col_name, table_name, actual_col_name, actual_col_name
     );
     
-    let distinct_df = match ctx.sql(&distinct_sql).await {
-        Ok(df) => df,
-        Err(e) => {
-            return Err(NailError::Statistics(format!("Failed to retrieve categories from column '{}': {}", actual_col_name, e)));
-        }
-    };
+    let count_df = ctx.sql(&count_sql).await?;
+    let count_batches = count_df.collect().await?;
     
-    let distinct_batches = distinct_df.clone().collect().await?;
-    let mut categories = HashSet::new();
+    let mut category_counts = HashMap::new();
+    let mut total_count = 0usize;
     
-    for batch in &distinct_batches {
-        if batch.num_columns() > 0 {
-            let array_ref = batch.column(0);
-        if let Some(arr) = array_ref.as_any().downcast_ref::<StringArray>() {
-            for i in 0..arr.len() {
-                if arr.is_valid(i) {
-                        categories.insert(arr.value(i).to_string());
-                }
-            }
-        } else if let Some(dict) = array_ref.as_any().downcast_ref::<DictionaryArray<UInt32Type>>() {
-            let keys = dict.keys();
-            if let Some(values) = dict.values().as_any().downcast_ref::<StringArray>() {
-                for i in 0..keys.len() {
-                    if keys.is_valid(i) {
-                        let k = keys.value(i) as usize;
-                            if k < values.len() {
-                                categories.insert(values.value(k).to_string());
-                            }
-                    }
-                }
-            }
-        } else {
-                // Try to convert to string representation
-                let schema = distinct_df.schema();
-                if let Some(field) = schema.fields().get(0) {
-                    match field.data_type() {
-                        datafusion::arrow::datatypes::DataType::Utf8 => {
-                            // Already handled above, but this is a fallback
-                            for i in 0..array_ref.len() {
-                                if !array_ref.is_null(i) {
-                                    if let Some(scalar) = datafusion::arrow::compute::cast(array_ref, &datafusion::arrow::datatypes::DataType::Utf8).ok() {
-                                        if let Some(str_arr) = scalar.as_any().downcast_ref::<StringArray>() {
-                                            if i < str_arr.len() && str_arr.is_valid(i) {
-                                                categories.insert(str_arr.value(i).to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        _ => {
-                            return Err(NailError::Statistics(format!("Column '{}' must be of string type for stratified sampling", actual_col_name)));
-                        }
-                    }
-                }
-            }
+    for batch in &count_batches {
+        let cat_array = batch.column(0);
+        let count_array = batch.column(1).as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
+        
+        for i in 0..batch.num_rows() {
+            let category = match cat_array.data_type() {
+                datafusion::arrow::datatypes::DataType::Utf8 => {
+                    cat_array.as_any().downcast_ref::<StringArray>().unwrap().value(i).to_string()
+                },
+                datafusion::arrow::datatypes::DataType::Int64 => {
+                    cat_array.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap().value(i).to_string()
+                },
+                _ => continue,
+            };
+            let count = count_array.value(i) as usize;
+            category_counts.insert(category, count);
+            total_count += count;
         }
     }
     
-    if categories.is_empty() {
+    if category_counts.is_empty() {
         return Err(NailError::Statistics("No categories found for stratified sampling".to_string()));
     }
     
-    let categories: Vec<String> = categories.into_iter().collect();
-    let per_group = n / categories.len();
+    // Calculate samples per category proportionally
+    let mut samples_per_category = HashMap::new();
+    let mut total_samples = 0;
+    
+    for (cat, count) in &category_counts {
+        let proportion = *count as f64 / total_count as f64;
+        let samples = (n as f64 * proportion).round() as usize;
+        samples_per_category.insert(cat.clone(), samples.min(*count)); // Don't sample more than available
+        total_samples += samples.min(*count);
+    }
+    
+    // Adjust if we're short on samples due to rounding
+    if total_samples < n {
+        let mut remaining = n - total_samples;
+        for (cat, count) in &category_counts {
+            let current_samples = samples_per_category[cat];
+            if current_samples < *count && remaining > 0 {
+                let additional = (remaining).min(*count - current_samples);
+                samples_per_category.insert(cat.clone(), current_samples + additional);
+                remaining -= additional;
+            }
+        }
+    }
+    
     let mut combined: Option<DataFrame> = None;
     
-    for cat in &categories {
-        // deterministic: take first per_group rows for each category
-        let filtered = ctx.table(table_name).await?
-            .filter(Expr::Column(datafusion::common::Column::new(None::<String>, &actual_col_name)).eq(lit(cat)))?;
-        let limited = filtered.limit(0, Some(per_group))?;
+    for (cat, samples) in &samples_per_category {
+        if *samples == 0 {
+            continue;
+        }
+        
+        // Create a query to randomly sample from each category
+        let category_sql = if let Some(s) = seed {
+            // Deterministic sampling with seed
+            format!(
+                "WITH cat_data AS (
+                    SELECT *, ROW_NUMBER() OVER() as cat_rn 
+                    FROM {} 
+                    WHERE \"{}\" = '{}'
+                )
+                SELECT * FROM cat_data 
+                WHERE ABS(HASH(CAST(cat_rn AS VARCHAR) || '{}')) % 1000000 < {}
+                LIMIT {}",
+                table_name, actual_col_name, cat, s, 
+                (*samples as f64 / category_counts[cat] as f64 * 1000000.0) as i64,
+                samples
+            )
+        } else {
+            // True random sampling
+            format!(
+                "SELECT * FROM {} 
+                 WHERE \"{}\" = '{}' 
+                 ORDER BY RANDOM() 
+                 LIMIT {}",
+                table_name, actual_col_name, cat, samples
+            )
+        };
+        
+        let category_df = ctx.sql(&category_sql).await?;
+        
         combined = Some(match combined {
-            None => limited,
-            Some(prev) => prev.union(limited)?,
+            None => category_df,
+            Some(prev) => prev.union(category_df)?,
         });
     }
     
-    let mut result_df = combined.unwrap();
-    // Handle remainder samples
-    let remainder = n - per_group * categories.len();
-    if remainder > 0 {
-        // add random remainder from full dataset
-        let rem = sample_random(df, remainder, None, None).await?;
-        result_df = result_df.union(rem)?;
-    }
+    let result_df = combined.ok_or_else(|| NailError::Statistics("No data sampled".to_string()))?;
     Ok(result_df)
 }

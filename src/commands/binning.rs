@@ -195,6 +195,13 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
         for field in schema.fields() {
             select_exprs.push(col(field.name()));
         }
+    } else {
+        // When dropping original, keep all columns except the one being binned
+        for field in schema.fields() {
+            if field.name() != column_name {
+                select_exprs.push(col(field.name()));
+            }
+        }
     }
     
     // Add binned column with a simplified binning expression
@@ -304,5 +311,270 @@ fn extract_float_value(batch: &datafusion::arrow::record_batch::RecordBatch, col
         Err(NailError::InvalidArgument(
             format!("Unexpected data type for numeric value: {:?}", array.data_type())
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion::arrow::array::{Float64Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    
+    async fn create_test_dataframe() -> NailResult<DataFrame> {
+        let ctx = SessionContext::new();
+        
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("value", DataType::Float64, false),
+            Field::new("category", DataType::Utf8, false),
+        ]));
+        
+        let value_array = Arc::new(Float64Array::from(vec![1.5, 5.0, 15.0, 25.0, 35.0, 45.0, 55.0, 65.0, 75.0, 85.0]));
+        let category_array = Arc::new(StringArray::from(vec!["A", "B", "A", "B", "A", "B", "A", "B", "A", "B"]));
+        
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![value_array, category_array],
+        )?;
+        
+        let df = ctx.read_batch(batch)?;
+        Ok(df)
+    }
+    
+    #[test]
+    fn test_parse_bins() {
+        // Test single number (number of bins)
+        let (edges, n_bins) = parse_bins("5", &BinningMethod::EqualWidth).unwrap();
+        assert!(edges.is_none());
+        assert_eq!(n_bins, Some(5));
+        
+        // Test comma-separated edges
+        let (edges, n_bins) = parse_bins("0,10,20,30", &BinningMethod::Custom).unwrap();
+        assert_eq!(edges, Some(vec![0.0, 10.0, 20.0, 30.0]));
+        assert!(n_bins.is_none());
+        
+        // Test invalid input
+        assert!(parse_bins("0", &BinningMethod::EqualWidth).is_err());
+        assert!(parse_bins("abc", &BinningMethod::EqualWidth).is_err());
+        assert!(parse_bins("10,20", &BinningMethod::Custom).is_ok()); // At least 2 edges is valid
+        assert!(parse_bins("10", &BinningMethod::Custom).is_ok()); // Single number is valid (becomes n_bins)
+        
+        // Test edge sorting
+        let (edges, _) = parse_bins("30,10,0,20", &BinningMethod::Custom).unwrap();
+        assert_eq!(edges, Some(vec![0.0, 10.0, 20.0, 30.0]));
+    }
+    
+    #[test]
+    fn test_calculate_equal_width_edges() {
+        // Test basic equal width binning
+        let edges = calculate_equal_width_edges(0.0, 100.0, 5, false);
+        assert_eq!(edges.len(), 6); // n_bins + 1
+        assert_eq!(edges[0], 0.0);
+        assert_eq!(edges[5], 100.0);
+        assert_eq!(edges[1], 20.0);
+        assert_eq!(edges[2], 40.0);
+        assert_eq!(edges[3], 60.0);
+        assert_eq!(edges[4], 80.0);
+        
+        // Test with include_lowest
+        let edges = calculate_equal_width_edges(0.0, 100.0, 5, true);
+        assert!(edges[0] <= 0.0); // Should be less than or equal to 0
+        
+        // Test with negative range
+        let edges = calculate_equal_width_edges(-50.0, 50.0, 4, false);
+        assert_eq!(edges[0], -50.0);
+        assert_eq!(edges[4], 50.0);
+        assert_eq!(edges[2], 0.0); // Middle should be 0
+    }
+    
+    #[test]
+    fn test_extract_float_value() {
+        // Create test batch with different numeric types
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("float_col", DataType::Float64, false),
+            Field::new("int_col", DataType::Int64, false),
+        ]));
+        
+        let float_array = Arc::new(Float64Array::from(vec![1.5, 2.5, 3.5]));
+        let int_array = Arc::new(Int64Array::from(vec![10, 20, 30]));
+        
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![float_array, int_array],
+        ).unwrap();
+        
+        // Test float extraction
+        let val = extract_float_value(&batch, 0, 0).unwrap();
+        assert_eq!(val, 1.5);
+        
+        let val = extract_float_value(&batch, 0, 2).unwrap();
+        assert_eq!(val, 3.5);
+        
+        // Test int extraction (should convert to float)
+        let val = extract_float_value(&batch, 1, 0).unwrap();
+        assert_eq!(val, 10.0);
+        
+        let val = extract_float_value(&batch, 1, 2).unwrap();
+        assert_eq!(val, 30.0);
+    }
+    
+    #[tokio::test]
+    async fn test_execute_equal_width_binning() {
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("test.parquet");
+        let output_path = temp_dir.path().join("output.parquet");
+        
+        // Create test data
+        let df = create_test_dataframe().await.unwrap();
+        crate::utils::io::write_data(&df, &input_path, None).await.unwrap();
+        
+        // Create args for equal width binning
+        let args = BinningArgs {
+            common: CommonArgs {
+                input: input_path.clone(),
+                output: Some(output_path.clone()),
+                format: None,
+                verbose: false,
+                jobs: None,
+                random: None,
+            },
+            columns: "value".to_string(),
+            bins: "5".to_string(),
+            method: BinningMethod::EqualWidth,
+            labels: None,
+            suffix: "_binned".to_string(),
+            drop_original: false,
+            include_lowest: false,
+        };
+        
+        // Execute binning
+        let result = execute(args).await;
+        assert!(result.is_ok());
+        
+        // Read result and verify
+        let result_df = crate::utils::io::read_data(&output_path).await.unwrap();
+        let schema = result_df.schema();
+        
+        // Check that both original and binned columns exist
+        assert!(schema.field_with_name(None, "value").is_ok());
+        assert!(schema.field_with_name(None, "value_binned").is_ok());
+        assert!(schema.field_with_name(None, "category").is_ok());
+        
+        // Check row count
+        let row_count = result_df.clone().count().await.unwrap();
+        assert_eq!(row_count, 10);
+    }
+    
+    #[tokio::test]
+    async fn test_execute_custom_binning_with_labels() {
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("test.parquet");
+        let output_path = temp_dir.path().join("output.parquet");
+        
+        // Create test data
+        let df = create_test_dataframe().await.unwrap();
+        crate::utils::io::write_data(&df, &input_path, None).await.unwrap();
+        
+        // Create args for custom binning with labels
+        let args = BinningArgs {
+            common: CommonArgs {
+                input: input_path.clone(),
+                output: Some(output_path.clone()),
+                format: None,
+                verbose: false,
+                jobs: None,
+                random: None,
+            },
+            columns: "value".to_string(),
+            bins: "0,30,60,90".to_string(),
+            method: BinningMethod::Custom,
+            labels: Some("Low,Medium,High".to_string()),
+            suffix: "_category".to_string(),
+            drop_original: true,
+            include_lowest: false,
+        };
+        
+        // Execute binning
+        let result = execute(args).await;
+        assert!(result.is_ok());
+        
+        // Read result and verify
+        let result_df = crate::utils::io::read_data(&output_path).await.unwrap();
+        let schema = result_df.schema();
+        
+        // Check that original column is dropped and binned column exists
+        assert!(schema.field_with_name(None, "value").is_err()); // Should be dropped
+        assert!(schema.field_with_name(None, "value_category").is_ok());
+        assert!(schema.field_with_name(None, "category").is_ok());
+    }
+    
+    #[tokio::test]
+    async fn test_execute_with_non_numeric_column() {
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("test.parquet");
+        
+        // Create test data
+        let df = create_test_dataframe().await.unwrap();
+        crate::utils::io::write_data(&df, &input_path, None).await.unwrap();
+        
+        // Create args attempting to bin a non-numeric column
+        let args = BinningArgs {
+            common: CommonArgs {
+                input: input_path.clone(),
+                output: None,
+                format: None,
+                verbose: false,
+                jobs: None,
+                random: None,
+            },
+            columns: "category".to_string(), // This is a string column
+            bins: "5".to_string(),
+            method: BinningMethod::EqualWidth,
+            labels: None,
+            suffix: "_binned".to_string(),
+            drop_original: false,
+            include_lowest: false,
+        };
+        
+        // Execute should fail because category is not numeric
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not numeric"));
+    }
+    
+    #[tokio::test]
+    async fn test_execute_with_mismatched_labels() {
+        let temp_dir = tempdir().unwrap();
+        let input_path = temp_dir.path().join("test.parquet");
+        
+        // Create test data
+        let df = create_test_dataframe().await.unwrap();
+        crate::utils::io::write_data(&df, &input_path, None).await.unwrap();
+        
+        // Create args with wrong number of labels
+        let args = BinningArgs {
+            common: CommonArgs {
+                input: input_path.clone(),
+                output: None,
+                format: None,
+                verbose: false,
+                jobs: None,
+                random: None,
+            },
+            columns: "value".to_string(),
+            bins: "5".to_string(), // 5 bins
+            method: BinningMethod::EqualWidth,
+            labels: Some("Low,High".to_string()), // Only 2 labels
+            suffix: "_binned".to_string(),
+            drop_original: false,
+            include_lowest: false,
+        };
+        
+        // Execute should fail due to label count mismatch
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Number of labels"));
     }
 }

@@ -186,3 +186,192 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_pivot_args_parsing() {
+        let args = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("data.parquet"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "category".to_string(),
+            columns: "month".to_string(),
+            values: Some("sales".to_string()),
+            agg: AggregationFunction::Sum,
+            fill: "0".to_string(),
+        };
+
+        assert_eq!(args.index, "category");
+        assert_eq!(args.columns, "month");
+        assert_eq!(args.values, Some("sales".to_string()));
+        assert!(matches!(args.agg, AggregationFunction::Sum));
+        assert_eq!(args.fill, "0");
+    }
+
+    #[test]
+    fn test_pivot_args_with_multiple_columns() {
+        let args = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("sales.csv"),
+                output: Some(PathBuf::from("pivot.parquet")),
+                format: Some(crate::cli::OutputFormat::Parquet),
+                random: Some(456),
+                jobs: Some(4),
+                verbose: true,
+            },
+            index: "region,product".to_string(),
+            columns: "quarter,year".to_string(),
+            values: Some("revenue,units".to_string()),
+            agg: AggregationFunction::Mean,
+            fill: "null".to_string(),
+        };
+
+        assert_eq!(args.index, "region,product");
+        assert_eq!(args.columns, "quarter,year");
+        assert_eq!(args.values, Some("revenue,units".to_string()));
+        assert!(matches!(args.agg, AggregationFunction::Mean));
+        assert_eq!(args.fill, "null");
+        assert_eq!(args.common.jobs, Some(4));
+        assert!(args.common.verbose);
+    }
+
+    #[test]
+    fn test_pivot_args_with_count_aggregation() {
+        let args = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("events.json"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "user_id".to_string(),
+            columns: "event_type".to_string(),
+            values: None,
+            agg: AggregationFunction::Count,
+            fill: "0".to_string(),
+        };
+
+        assert_eq!(args.index, "user_id");
+        assert_eq!(args.columns, "event_type");
+        assert_eq!(args.values, None);
+        assert!(matches!(args.agg, AggregationFunction::Count));
+        assert_eq!(args.fill, "0");
+    }
+
+    #[test]
+    fn test_pivot_args_with_min_max_aggregation() {
+        let args_min = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("temperature.parquet"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "location".to_string(),
+            columns: "month".to_string(),
+            values: Some("temperature".to_string()),
+            agg: AggregationFunction::Min,
+            fill: "-999".to_string(),
+        };
+
+        let args_max = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("temperature.parquet"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "location".to_string(),
+            columns: "month".to_string(),
+            values: Some("temperature".to_string()),
+            agg: AggregationFunction::Max,
+            fill: "-999".to_string(),
+        };
+
+        assert!(matches!(args_min.agg, AggregationFunction::Min));
+        assert!(matches!(args_max.agg, AggregationFunction::Max));
+        assert_eq!(args_min.fill, "-999");
+        assert_eq!(args_max.fill, "-999");
+    }
+
+    #[test]
+    fn test_aggregation_function_debug() {
+        let sum_func = AggregationFunction::Sum;
+        let mean_func = AggregationFunction::Mean;
+        let count_func = AggregationFunction::Count;
+        let min_func = AggregationFunction::Min;
+        let max_func = AggregationFunction::Max;
+
+        assert_eq!(format!("{:?}", sum_func), "Sum");
+        assert_eq!(format!("{:?}", mean_func), "Mean");
+        assert_eq!(format!("{:?}", count_func), "Count");
+        assert_eq!(format!("{:?}", min_func), "Min");
+        assert_eq!(format!("{:?}", max_func), "Max");
+    }
+
+    #[test]
+    fn test_pivot_args_clone() {
+        let args = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("test.parquet"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "category".to_string(),
+            columns: "month".to_string(),
+            values: Some("sales".to_string()),
+            agg: AggregationFunction::Sum,
+            fill: "0".to_string(),
+        };
+
+        let cloned = args.clone();
+        assert_eq!(args.index, cloned.index);
+        assert_eq!(args.columns, cloned.columns);
+        assert_eq!(args.values, cloned.values);
+        assert_eq!(args.fill, cloned.fill);
+        assert!(matches!(cloned.agg, AggregationFunction::Sum));
+    }
+
+    #[test]
+    fn test_pivot_args_parsing_columns() {
+        let args = PivotArgs {
+            common: CommonArgs {
+                input: PathBuf::from("test.parquet"),
+                output: None,
+                format: None,
+                random: None,
+                jobs: None,
+                verbose: false,
+            },
+            index: "col_a,col_b,col_c".to_string(),
+            columns: "pivot_col".to_string(),
+            values: Some("value1,value2".to_string()),
+            agg: AggregationFunction::Sum,
+            fill: "0".to_string(),
+        };
+
+        let index_cols: Vec<&str> = args.index.split(',').map(|s| s.trim()).collect();
+        let value_cols: Vec<&str> = args.values.as_ref().unwrap().split(',').map(|s| s.trim()).collect();
+        
+        assert_eq!(index_cols, vec!["col_a", "col_b", "col_c"]);
+        assert_eq!(value_cols, vec!["value1", "value2"]);
+    }
+}
+

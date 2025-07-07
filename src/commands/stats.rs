@@ -49,7 +49,7 @@ pub async fn execute(args: StatsArgs) -> NailResult<()> {
 	
 	// Print overall row count for basic stats when outputting to console
 	if args.common.output.is_none() && args.common.format.is_none() {
-		let total_rows = read_data(&args.common.input).await?.clone().count().await?;
+		let total_rows = df.clone().count().await?;
 		println!("count | {}", total_rows);
 	}
 	

@@ -79,3 +79,441 @@ async fn drop_rows_by_indices(df: &DataFrame, indices: &[usize], jobs: Option<us
 	let result = ctx.sql(&sql).await?;
 	Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::CommonArgs;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+    use datafusion::prelude::SessionContext;
+    use parquet::arrow::ArrowWriter;
+    use arrow::array::{Int64Array, StringArray, Float64Array};
+    use arrow::record_batch::RecordBatch;
+    use arrow_schema::{DataType, Field, Schema};
+    use std::fs::File;
+    use std::sync::Arc;
+
+    fn create_test_data() -> (tempfile::TempDir, PathBuf) {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.parquet");
+        
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("value", DataType::Float64, true),
+            Field::new("category", DataType::Utf8, true),
+        ]));
+
+        let id_array = Int64Array::from(vec![1, 2, 3, 4, 5]);
+        let name_array = StringArray::from(vec![
+            Some("Alice"), Some("Bob"), Some("Charlie"), Some("David"), Some("Eve")
+        ]);
+        let value_array = Float64Array::from(vec![
+            Some(100.0), Some(200.0), Some(300.0), Some(400.0), Some(500.0)
+        ]);
+        let category_array = StringArray::from(vec![
+            Some("A"), Some("B"), Some("A"), Some("C"), Some("B")
+        ]);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id_array),
+                Arc::new(name_array),
+                Arc::new(value_array),
+                Arc::new(category_array),
+            ],
+        ).unwrap();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        (temp_dir, file_path)
+    }
+
+    #[tokio::test]
+    async fn test_drop_columns_by_name() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("dropped_cols.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("value,category".to_string()),
+            rows: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.schema().fields().len(), 2); // Should have 2 columns left
+        assert!(df.schema().field_with_name(None, "id").is_ok());
+        assert!(df.schema().field_with_name(None, "name").is_ok());
+        assert!(df.schema().field_with_name(None, "value").is_err());
+        assert!(df.schema().field_with_name(None, "category").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_columns_by_pattern() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("dropped_pattern.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("val.*,cat.*".to_string()),
+            rows: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.schema().fields().len(), 2); // Should drop columns matching pattern
+        assert!(df.schema().field_with_name(None, "id").is_ok());
+        assert!(df.schema().field_with_name(None, "name").is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_rows_by_indices() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("dropped_rows.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("1,3,5".to_string()),
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 2); // Should have 2 rows left (dropped rows 1, 3, 5)
+    }
+
+    #[tokio::test]
+    async fn test_drop_rows_by_range() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("dropped_range.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("2-4".to_string()),
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 2); // Should have 2 rows left (dropped rows 2, 3, 4)
+    }
+
+    #[tokio::test]
+    async fn test_drop_both_columns_and_rows() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("dropped_both.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("value".to_string()),
+            rows: Some("1,5".to_string()),
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.schema().fields().len(), 3); // Should have 3 columns left
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 3); // Should have 3 rows left
+    }
+
+    #[tokio::test]
+    async fn test_drop_verbose_mode() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: true,
+                jobs: None,
+            },
+            columns: Some("value".to_string()),
+            rows: None,
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_drop_no_arguments() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("unchanged.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        // Should output all data unchanged
+        assert_eq!(df.schema().fields().len(), 4);
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 5);
+    }
+
+    #[tokio::test]
+    async fn test_drop_out_of_range_rows() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("out_of_range.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("10,20".to_string()), // Indices beyond the data
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 5); // Should have all rows (no valid indices to drop)
+    }
+
+    #[tokio::test]
+    async fn test_drop_single_column() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("single_col_dropped.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("name".to_string()),
+            rows: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.schema().fields().len(), 3); // Should have 3 columns left
+        assert!(df.schema().field_with_name(None, "name").is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_single_row() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("single_row_dropped.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("3".to_string()),
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 4); // Should have 4 rows left
+    }
+
+    #[tokio::test]
+    async fn test_drop_invalid_column() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("nonexistent_column".to_string()),
+            rows: None,
+        };
+
+        let result = execute(args).await;
+        // This should fail because the column doesn't exist
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn test_drop_empty_column_spec() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("empty_spec.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("".to_string()), // Empty column specification
+            rows: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        // Should not drop any columns with empty spec
+        assert_eq!(df.schema().fields().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_drop_empty_row_spec() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("empty_row_spec.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("".to_string()), // Empty row specification
+        };
+
+        let result = execute(args).await;
+        // Should fail with invalid row specification
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_drop_mixed_valid_invalid_rows() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("mixed_rows.parquet");
+        
+        let args = DropArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: None,
+            rows: Some("1,10,3".to_string()), // Mix of valid and out-of-range indices
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        let row_count = df.clone().count().await.unwrap();
+        assert_eq!(row_count, 3); // Should drop valid indices (1, 3) and ignore invalid ones
+    }
+}

@@ -8,6 +8,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx, open_workbook, Data};
 use rust_xlsxwriter::{Workbook, Format};
 use std::sync::Arc;
+use std::fs::File;
+use std::io::Write;
 
 pub async fn read_data(path: &Path) -> NailResult<DataFusionDataFrame> {
 	let ctx = create_context().await?;
@@ -167,18 +169,32 @@ pub async fn write_data(df: &DataFusionDataFrame, path: &Path, format: Option<&F
 	
 	match output_format {
 		FileFormat::Parquet => {
-			df.clone().write_parquet(
-				path.to_str().unwrap(),
-				DataFrameWriteOptions::new(),
-				None,
-			).await.map_err(NailError::DataFusion)?;
+			// Check if DataFrame is empty and handle it specially
+			let row_count = df.clone().count().await.map_err(NailError::DataFusion)?;
+			if row_count == 0 {
+				// Create empty Parquet file
+				write_empty_parquet_file(df, path).await?;
+			} else {
+				df.clone().write_parquet(
+					path.to_str().unwrap(),
+					DataFrameWriteOptions::new(),
+					None,
+				).await.map_err(NailError::DataFusion)?;
+			}
 		},
 		FileFormat::Csv => {
-			df.clone().write_csv(
-				path.to_str().unwrap(),
-				DataFrameWriteOptions::new(),
-				None,
-			).await.map_err(NailError::DataFusion)?;
+			// Check if DataFrame is empty and handle it specially
+			let row_count = df.clone().count().await.map_err(NailError::DataFusion)?;
+			if row_count == 0 {
+				// Create empty CSV file with headers
+				write_empty_csv_file(df, path).await?;
+			} else {
+				df.clone().write_csv(
+					path.to_str().unwrap(),
+					DataFrameWriteOptions::new(),
+					None,
+				).await.map_err(NailError::DataFusion)?;
+			}
 		},
 		FileFormat::Json => {
 			df.clone().write_json(
@@ -199,10 +215,6 @@ async fn write_excel_file(df: &DataFusionDataFrame, path: &Path) -> Result<(), d
 	// Collect the data from DataFusion DataFrame
 	let batches = df.clone().collect().await?;
 	
-	if batches.is_empty() {
-		return Ok(());
-	}
-	
 	// Create a new Excel workbook
 	let mut workbook = Workbook::new();
 	
@@ -212,18 +224,26 @@ async fn write_excel_file(df: &DataFusionDataFrame, path: &Path) -> Result<(), d
 	// Add a worksheet to the workbook
 	let worksheet = workbook.add_worksheet();
 	
-	// Write the header row
-	let schema = batches[0].schema();
-	for (col_idx, field) in schema.fields().iter().enumerate() {
-		worksheet.write_string(0, col_idx as u16, field.name().as_str())
-			.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+	// Write the header row - handle empty batches case
+	if batches.is_empty() {
+		// Use DataFrame schema when no batches
+		for (col_idx, field) in df.schema().fields().iter().enumerate() {
+			worksheet.write_string(0, col_idx as u16, field.name().as_str())
+				.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+		}
+	} else {
+		// Use batch schema when batches exist
+		for (col_idx, field) in batches[0].schema().fields().iter().enumerate() {
+			worksheet.write_string(0, col_idx as u16, field.name().as_str())
+				.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+		}
 	}
 	
 	// Write the data rows
 	let mut current_row = 1u32;
 	for batch in &batches {
 		for row_idx in 0..batch.num_rows() {
-			for (col_idx, field) in schema.fields().iter().enumerate() {
+			for (col_idx, field) in batch.schema().fields().iter().enumerate() {
 				match field.data_type() {
 					DataType::Utf8 => {
 						let array = batch.column(col_idx).as_any().downcast_ref::<StringArray>().unwrap();
@@ -295,6 +315,67 @@ async fn write_excel_file(df: &DataFusionDataFrame, path: &Path) -> Result<(), d
 	// Save the workbook to a file
 	workbook.save(path)
 		.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+	
+	Ok(())
+}
+
+async fn write_empty_csv_file(df: &DataFusionDataFrame, path: &Path) -> NailResult<()> {
+	let mut file = File::create(path)
+		.map_err(|e| NailError::Io(e))?;
+	
+	// Write CSV header
+	let schema = df.schema();
+	let header: Vec<String> = schema.fields().iter()
+		.map(|f| f.name().clone())
+		.collect();
+	
+	writeln!(file, "{}", header.join(","))
+		.map_err(|e| NailError::Io(e))?;
+	
+	Ok(())
+}
+
+pub(crate) async fn write_empty_parquet_file(df: &DataFusionDataFrame, path: &Path) -> NailResult<()> {
+	use parquet::arrow::ArrowWriter;
+	use std::fs::File;
+	
+	// Get the schema from the empty DataFrame
+	let schema = df.schema();
+	let arrow_schema = schema.as_arrow().clone();
+	
+	// Create an empty RecordBatch with the same schema
+	let empty_arrays: Vec<std::sync::Arc<dyn arrow::array::Array>> = arrow_schema.fields().iter()
+		.map(|field| {
+			use arrow::array::*;
+			use arrow::datatypes::DataType;
+			
+			match field.data_type() {
+				DataType::Int64 => std::sync::Arc::new(Int64Array::from(Vec::<i64>::new())) as std::sync::Arc<dyn arrow::array::Array>,
+				DataType::Int32 => std::sync::Arc::new(Int32Array::from(Vec::<i32>::new())),
+				DataType::Float64 => std::sync::Arc::new(Float64Array::from(Vec::<f64>::new())),
+				DataType::Float32 => std::sync::Arc::new(Float32Array::from(Vec::<f32>::new())),
+				DataType::Boolean => std::sync::Arc::new(BooleanArray::from(Vec::<bool>::new())),
+				DataType::Utf8 => std::sync::Arc::new(StringArray::from(Vec::<String>::new())),
+				_ => std::sync::Arc::new(StringArray::from(Vec::<String>::new())), // Default to string for other types
+			}
+		})
+		.collect();
+	
+	let empty_batch = arrow::record_batch::RecordBatch::try_new(
+		std::sync::Arc::new(arrow_schema),
+		empty_arrays,
+	).map_err(|e| NailError::DataFusion(datafusion::error::DataFusionError::ArrowError(e, None)))?;
+	
+	// Write the empty batch to a Parquet file
+	let file = File::create(path)
+		.map_err(|e| NailError::Io(e))?;
+	let mut writer = ArrowWriter::try_new(file, empty_batch.schema(), None)
+		.map_err(|e| NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e))))?;
+	
+	writer.write(&empty_batch)
+		.map_err(|e| NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e))))?;
+	writer.close()
+		.map_err(|e| NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e))))?;
 	
 	Ok(())
 }

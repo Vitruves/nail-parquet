@@ -1,6 +1,4 @@
 use clap::Args;
-use datafusion::prelude::*;
-use datafusion::logical_expr::{lit, Expr};
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
@@ -32,14 +30,22 @@ pub struct CreateArgs {
 pub async fn execute(args: CreateArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
+    let ctx = crate::utils::create_context_with_jobs(args.common.jobs).await?;
     let df = read_data(&args.common.input).await?;
+    ctx.register_table("t", df.clone().into_view())?;
+    
     let mut result_df = df;
 
     // Apply row filter if specified
     if let Some(row_expr) = &args.row_filter {
         args.common.log_if_verbose(&format!("Applying row filter: {}", row_expr));
-        let filter_expr = parse_expression(row_expr, &result_df)?;
-        result_df = result_df.filter(filter_expr)?;
+        // Use SQL for row filtering
+        let filter_sql = format!("SELECT * FROM t WHERE {}", row_expr);
+        result_df = ctx.sql(&filter_sql).await
+            .map_err(|e| NailError::InvalidArgument(format!("Invalid row filter expression: {}", e)))?;
+        // Re-register the filtered data - need to deregister first
+        ctx.deregister_table("t")?;
+        ctx.register_table("t", result_df.clone().into_view())?;
     }
 
     // Parse and apply column creation specs
@@ -67,18 +73,18 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
             }
         }
 
-        // Build select expressions including new columns
-        let mut select_exprs: Vec<Expr> = result_df.schema().fields().iter()
-            .map(|f| Expr::Column(datafusion::common::Column::new(None::<String>, f.name())))
-            .collect();
-
-        // Add new column expressions
+        // Build SQL select list
+        let mut select_list = vec!["*".to_string()];
+        
         for (name, expr_str) in &column_map {
-            let expr = parse_expression(expr_str, &result_df)?;
-            select_exprs.push(expr.alias(name));
+            select_list.push(format!("({}) AS \"{}\"", expr_str, name));
         }
-
-        result_df = result_df.select(select_exprs)?;
+        
+        let sql = format!("SELECT {} FROM t", select_list.join(", "));
+        args.common.log_if_verbose(&format!("Executing SQL: {}", sql));
+        
+        result_df = ctx.sql(&sql).await
+            .map_err(|e| NailError::InvalidArgument(format!("Invalid column expression: {}", e)))?;
     }
 
     // Write or display result
@@ -88,137 +94,260 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
     Ok(())
 }
 
-fn parse_expression(expr_str: &str, df: &DataFrame) -> NailResult<Expr> {
-    let schema = df.schema();
-    let existing_columns: Vec<String> = schema.fields().iter()
-        .map(|f| f.name().clone()).collect();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::CommonArgs;
+    use std::path::PathBuf;
+    use tempfile::tempdir;
+    use datafusion::prelude::SessionContext;
+    use parquet::arrow::ArrowWriter;
+    use arrow::array::{Int64Array, StringArray, Float64Array};
+    use arrow::record_batch::RecordBatch;
+    use arrow_schema::{DataType, Field, Schema};
+    use std::fs::File;
+    use std::sync::Arc;
 
-    // Simple expression parser
-    // This is a basic implementation that supports:
-    // - Column references
-    // - Constants (numbers)
-    // - Basic arithmetic (+, -, *, /)
-    // - Parentheses for grouping
-
-    parse_expr_recursive(expr_str.trim(), &existing_columns)
-}
-
-fn parse_expr_recursive(expr: &str, columns: &[String]) -> NailResult<Expr> {
-    let expr = expr.trim();
-    
-    // Handle parentheses
-    if expr.starts_with('(') && expr.ends_with(')') {
-        let inner = &expr[1..expr.len()-1];
-        if is_balanced_parens(inner) {
-            return parse_expr_recursive(inner, columns);
-        }
-    }
-
-    // Handle binary operations (lowest precedence first)
-    // Comparison operators
-    if let Some(pos) = find_operator(expr, &['>', '<']) {
-        let (left, op, right) = split_at_operator(expr, pos);
-        let left_expr = parse_expr_recursive(left, columns)?;
-        let right_expr = parse_expr_recursive(right, columns)?;
+    fn create_test_data() -> (tempfile::TempDir, PathBuf) {
+        let temp_dir = tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.parquet");
         
-        return Ok(match op {
-            '>' => left_expr.gt(right_expr),
-            '<' => left_expr.lt(right_expr),
-            _ => unreachable!(),
-        });
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int64, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("value", DataType::Float64, true),
+            Field::new("category", DataType::Utf8, true),
+        ]));
+
+        let id_array = Int64Array::from(vec![1, 2, 3, 4, 5]);
+        let name_array = StringArray::from(vec![
+            Some("Alice"), Some("Bob"), Some("Charlie"), Some("David"), Some("Eve")
+        ]);
+        let value_array = Float64Array::from(vec![
+            Some(100.0), Some(200.0), Some(300.0), Some(400.0), Some(500.0)
+        ]);
+        let category_array = StringArray::from(vec![
+            Some("A"), Some("B"), Some("A"), Some("C"), Some("B")
+        ]);
+
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(id_array),
+                Arc::new(name_array),
+                Arc::new(value_array),
+                Arc::new(category_array),
+            ],
+        ).unwrap();
+
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        (temp_dir, file_path)
     }
 
-    // Arithmetic operators
-    if let Some(pos) = find_operator(expr, &['+', '-']) {
-        let (left, op, right) = split_at_operator(expr, pos);
-        let left_expr = parse_expr_recursive(left, columns)?;
-        let right_expr = parse_expr_recursive(right, columns)?;
+    #[tokio::test]
+    async fn test_create_arithmetic_column() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("output.parquet");
         
-        return Ok(match op {
-            '+' => left_expr + right_expr,
-            '-' => left_expr - right_expr,
-            _ => unreachable!(),
-        });
-    }
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("doubled=value*2".to_string()),
+            row_filter: None,
+        };
 
-    if let Some(pos) = find_operator(expr, &['*', '/']) {
-        let (left, op, right) = split_at_operator(expr, pos);
-        let left_expr = parse_expr_recursive(left, columns)?;
-        let right_expr = parse_expr_recursive(right, columns)?;
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
         
-        return Ok(match op {
-            '*' => left_expr * right_expr,
-            '/' => left_expr / right_expr,
-            _ => unreachable!(),
-        });
+        assert_eq!(df.clone().count().await.unwrap(), 5);
+        assert!(df.schema().field_with_name(None, "doubled").is_ok());
+        assert_eq!(df.schema().fields().len(), 5);
     }
 
-    // Handle functions
-    if expr.contains('(') && expr.ends_with(')') {
-        if let Some(func_start) = expr.find('(') {
-            let func_name = &expr[..func_start];
-            let _args_str = &expr[func_start+1..expr.len()-1];
-            
-            // For now, return an error for unsupported functions
-            return Err(NailError::InvalidArgument(format!("Function '{}' is not yet supported", func_name)));
-        }
+    #[tokio::test]
+    async fn test_create_comparison_column() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("output.parquet");
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("high_value=value>300".to_string()),
+            row_filter: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.clone().count().await.unwrap(), 5);
+        assert!(df.schema().field_with_name(None, "high_value").is_ok());
     }
 
-    // Handle column references
-    if columns.contains(&expr.to_string()) {
-        return Ok(Expr::Column(datafusion::common::Column::new(None::<String>, expr)));
+    #[tokio::test]
+    async fn test_create_multiple_columns() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("output.parquet");
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("doubled=value*2,id_plus_one=id+1".to_string()),
+            row_filter: None,
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.clone().count().await.unwrap(), 5);
+        assert!(df.schema().field_with_name(None, "doubled").is_ok());
+        assert!(df.schema().field_with_name(None, "id_plus_one").is_ok());
+        assert_eq!(df.schema().fields().len(), 6);
     }
 
-    // Handle numeric constants
-    if let Ok(num) = expr.parse::<f64>() {
-        return Ok(lit(num));
+    #[tokio::test]
+    async fn test_create_with_row_filter() {
+        let (_temp_dir, input_path) = create_test_data();
+        let output_dir = tempdir().unwrap();
+        let output_path = output_dir.path().join("output.parquet");
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: Some(output_path.clone()),
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("doubled=value*2".to_string()),
+            row_filter: Some("id>2".to_string()),
+        };
+
+        execute(args).await.unwrap();
+
+        let ctx = SessionContext::new();
+        let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
+        
+        assert_eq!(df.clone().count().await.unwrap(), 3); // Only rows with id > 2
+        assert!(df.schema().field_with_name(None, "doubled").is_ok());
     }
 
-    // Handle integer constants
-    if let Ok(num) = expr.parse::<i64>() {
-        return Ok(lit(num));
+    #[tokio::test]
+    async fn test_create_existing_column_error() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("id=value*2".to_string()), // 'id' already exists
+            row_filter: None,
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already exists"));
     }
 
-    Err(NailError::InvalidArgument(format!("Invalid expression: {}", expr)))
-}
+    #[tokio::test]
+    async fn test_create_invalid_column_spec() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("invalid_spec".to_string()), // Missing '='
+            row_filter: None,
+        };
 
-fn is_balanced_parens(s: &str) -> bool {
-    let mut count = 0;
-    for c in s.chars() {
-        match c {
-            '(' => count += 1,
-            ')' => {
-                count -= 1;
-                if count < 0 {
-                    return false;
-                }
-            }
-            _ => {}
-        }
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid column spec"));
     }
-    count == 0
-}
 
-fn find_operator(expr: &str, ops: &[char]) -> Option<usize> {
-    let mut paren_count = 0;
-    let chars: Vec<char> = expr.chars().collect();
-    
-    // Search from right to left for right associativity
-    for i in (0..chars.len()).rev() {
-        match chars[i] {
-            '(' => paren_count += 1,
-            ')' => paren_count -= 1,
-            c if paren_count == 0 && ops.contains(&c) => return Some(i),
-            _ => {}
-        }
+    #[tokio::test]
+    async fn test_create_invalid_expression() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("test=nonexistent_column*2".to_string()),
+            row_filter: None,
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid column expression"));
     }
-    None
-}
 
-fn split_at_operator(expr: &str, pos: usize) -> (&str, char, &str) {
-    let chars: Vec<char> = expr.chars().collect();
-    let left = &expr[..pos];
-    let op = chars[pos];
-    let right = &expr[pos+1..];
-    (left.trim(), op, right.trim())
+    #[tokio::test]
+    async fn test_create_invalid_row_filter() {
+        let (_temp_dir, input_path) = create_test_data();
+        
+        let args = CreateArgs {
+            common: CommonArgs {
+                input: input_path,
+                output: None,
+                format: None,
+                random: None,
+                verbose: false,
+                jobs: None,
+            },
+            columns: Some("doubled=value*2".to_string()),
+            row_filter: Some("nonexistent_column>5".to_string()),
+        };
+
+        let result = execute(args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid row filter expression"));
+    }
 }

@@ -145,3 +145,143 @@ async fn perform_join(
 	let result = ctx.sql(&sql).await?;
 	Ok(result)
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::path::PathBuf;
+
+	#[test]
+	fn test_merge_args_parsing() {
+		let args = MergeArgs {
+			common: CommonArgs {
+				input: PathBuf::from("left.parquet"),
+				output: None,
+				format: None,
+				random: None,
+				jobs: None,
+				verbose: false,
+			},
+			right: PathBuf::from("right.parquet"),
+			left_join: false,
+			right_join: false,
+			key: Some("id".to_string()),
+			key_mapping: None,
+		};
+
+		assert_eq!(args.right, PathBuf::from("right.parquet"));
+		assert_eq!(args.key, Some("id".to_string()));
+		assert!(!args.left_join);
+		assert!(!args.right_join);
+		assert_eq!(args.key_mapping, None);
+	}
+
+	#[test]
+	fn test_merge_args_with_left_join() {
+		let args = MergeArgs {
+			common: CommonArgs {
+				input: PathBuf::from("table1.csv"),
+				output: Some(PathBuf::from("merged.parquet")),
+				format: Some(crate::cli::OutputFormat::Parquet),
+				random: Some(123),
+				jobs: Some(8),
+				verbose: true,
+			},
+			right: PathBuf::from("table2.csv"),
+			left_join: true,
+			right_join: false,
+			key: None,
+			key_mapping: Some("user_id=id".to_string()),
+		};
+
+		assert_eq!(args.right, PathBuf::from("table2.csv"));
+		assert!(args.left_join);
+		assert!(!args.right_join);
+		assert_eq!(args.key, None);
+		assert_eq!(args.key_mapping, Some("user_id=id".to_string()));
+		assert_eq!(args.common.jobs, Some(8));
+		assert!(args.common.verbose);
+	}
+
+	#[test]
+	fn test_merge_args_with_right_join() {
+		let args = MergeArgs {
+			common: CommonArgs {
+				input: PathBuf::from("data.json"),
+				output: None,
+				format: None,
+				random: None,
+				jobs: None,
+				verbose: false,
+			},
+			right: PathBuf::from("lookup.json"),
+			left_join: false,
+			right_join: true,
+			key: Some("product_id".to_string()),
+			key_mapping: None,
+		};
+
+		assert_eq!(args.right, PathBuf::from("lookup.json"));
+		assert!(!args.left_join);
+		assert!(args.right_join);
+		assert_eq!(args.key, Some("product_id".to_string()));
+		assert_eq!(args.key_mapping, None);
+	}
+
+	#[test]
+	fn test_parse_key_mapping_valid() {
+		let result = parse_key_mapping("left_col=right_col");
+		assert!(result.is_ok());
+		let (left, right) = result.unwrap();
+		assert_eq!(left, "left_col");
+		assert_eq!(right, "right_col");
+	}
+
+	#[test]
+	fn test_parse_key_mapping_with_spaces() {
+		let result = parse_key_mapping("  left_col  =  right_col  ");
+		assert!(result.is_ok());
+		let (left, right) = result.unwrap();
+		assert_eq!(left, "left_col");
+		assert_eq!(right, "right_col");
+	}
+
+	#[test]
+	fn test_parse_key_mapping_invalid() {
+		let result = parse_key_mapping("invalid_format");
+		assert!(result.is_err());
+		assert!(result.unwrap_err().to_string().contains("Key mapping must be in format"));
+	}
+
+	#[test]
+	fn test_parse_key_mapping_empty() {
+		let result = parse_key_mapping("");
+		assert!(result.is_err());
+	}
+
+	#[test]
+	fn test_merge_args_clone() {
+		let args = MergeArgs {
+			common: CommonArgs {
+				input: PathBuf::from("test.parquet"),
+				output: None,
+				format: None,
+				random: None,
+				jobs: None,
+				verbose: false,
+			},
+			right: PathBuf::from("right.parquet"),
+			left_join: true,
+			right_join: false,
+			key: Some("id".to_string()),
+			key_mapping: None,
+		};
+
+		let cloned = args.clone();
+		assert_eq!(args.right, cloned.right);
+		assert_eq!(args.left_join, cloned.left_join);
+		assert_eq!(args.right_join, cloned.right_join);
+		assert_eq!(args.key, cloned.key);
+		assert_eq!(args.key_mapping, cloned.key_mapping);
+	}
+}

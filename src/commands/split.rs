@@ -181,28 +181,9 @@ async fn stratified_split(
 	let mut split_dfs: Vec<Option<DataFrame>> = vec![None; ratios.len()];
 	
 	for (category, _count) in &category_counts {
-		// Handle different data types for the WHERE clause
-		let category_sql = if category.parse::<i64>().is_ok() {
-			// Numeric category - don't quote
-			format!(
-				"SELECT * FROM {} WHERE {} = {}",
-				table_name, actual_col_name, category
-			)
-		} else if category.parse::<f64>().is_ok() {
-			// Float category - don't quote
-			format!(
-				"SELECT * FROM {} WHERE {} = {}",
-				table_name, actual_col_name, category
-			)
-		} else {
-			// String category - quote it
-			format!(
-				"SELECT * FROM {} WHERE {} = '{}'",
-				table_name, actual_col_name, category
-			)
-		};
-		
-		let category_df = ctx.sql(&category_sql).await?;
+		// Use parameterized queries to avoid SQL injection
+		let category_df = ctx.table(table_name).await?
+			.filter(col(&actual_col_name).eq(lit(category)))?;
 		let category_rows = category_df.clone().count().await?;
 		
 		let shuffled_category = if let Some(s) = seed {
@@ -265,7 +246,8 @@ async fn random_split(
 	let shuffled_df = if let Some(s) = seed {
 		shuffle_dataframe_with_seed(df, s, jobs).await?
 	} else {
-		df.clone()
+		// Use random shuffling when no seed is provided
+		shuffle_dataframe(df, jobs).await?
 	};
 	
 	let mut current_offset = 0;
@@ -345,6 +327,17 @@ fn get_extension_for_format(format: &Option<crate::utils::FileFormat>) -> String
 	}
 }
 
+async fn shuffle_dataframe(df: &datafusion::prelude::DataFrame, jobs: Option<usize>) -> NailResult<datafusion::prelude::DataFrame> {
+	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
+	ctx.register_table("temp_table", df.clone().into_view())?;
+
+	// Simple shuffling using ORDER BY RANDOM() 
+	let sql = "SELECT * FROM temp_table ORDER BY RANDOM()";
+	
+	let result = ctx.sql(sql).await?;
+	Ok(result)
+}
+
 async fn shuffle_dataframe_with_seed(df: &datafusion::prelude::DataFrame, seed: u64, jobs: Option<usize>) -> NailResult<datafusion::prelude::DataFrame> {
 	use rand::{SeedableRng, seq::SliceRandom};
 	use rand::rngs::StdRng;
@@ -355,27 +348,75 @@ async fn shuffle_dataframe_with_seed(df: &datafusion::prelude::DataFrame, seed: 
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
 	let total_rows = df.clone().count().await?;
+	
+	// For very large datasets, we need a more scalable approach
+	// Instead of generating all indices in memory, we'll use a deterministic hash-based approach
+	if total_rows > 1_000_000 {
+		// Use a hash-based approach for large datasets
+		let sql = format!(
+			"SELECT * FROM {} ORDER BY MD5(CAST(ROW_NUMBER() OVER() AS VARCHAR) || '{}')",
+			table_name, seed
+		);
+		let result = ctx.sql(&sql).await?;
+		return Ok(result);
+	}
+	
+	// For smaller datasets, use the shuffle approach but with batching
 	let mut rng = StdRng::seed_from_u64(seed);
 	let mut indices: Vec<usize> = (0..total_rows).collect();
 	indices.shuffle(&mut rng);
 	
-	let indices_str = indices.iter()
-		.map(|&i| (i + 1).to_string())
-		.collect::<Vec<_>>()
-		.join(",");
-	
-	let original_columns: Vec<String> = df.schema().fields().iter()
-		.map(|f| format!("\"{}\"", f.name()))
+	// Create a temporary table with the shuffled indices
+	let indices_data: Vec<_> = indices.iter()
+		.enumerate()
+		.map(|(new_pos, &old_pos)| (old_pos as i64 + 1, new_pos as i64))
 		.collect();
 	
-	let sql = format!(
-		"SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
-		original_columns.join(", "),
-		original_columns.join(", "),
-		table_name, 
-		indices_str
-	);
+	// Build a values table
+	let values_rows: Vec<String> = indices_data.iter()
+		.map(|(old, new)| format!("({}, {})", old, new))
+		.collect();
 	
-	let result = ctx.sql(&sql).await?;
-	Ok(result)
+	// Process in chunks to avoid SQL length limits
+	const CHUNK_SIZE: usize = 10000;
+	let chunks: Vec<_> = values_rows.chunks(CHUNK_SIZE).collect();
+	
+	if chunks.len() == 1 {
+		// Small dataset, use single query
+		let values_sql = values_rows.join(", ");
+		let sql = format!(
+			"WITH shuffle_map(old_rn, new_order) AS (VALUES {}) \
+			 SELECT t.* FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) t \
+			 JOIN shuffle_map sm ON t.rn = sm.old_rn \
+			 ORDER BY sm.new_order",
+			values_sql, table_name
+		);
+		let result = ctx.sql(&sql).await?;
+		Ok(result)
+	} else {
+		// Large dataset, create a temporary mapping table
+		ctx.sql(&format!("CREATE TEMP TABLE shuffle_map_{} (old_rn BIGINT, new_order BIGINT)", seed)).await?;
+		
+		for chunk in chunks {
+			let values_sql = chunk.join(", ");
+			let insert_sql = format!(
+				"INSERT INTO shuffle_map_{} VALUES {}",
+				seed, values_sql
+			);
+			ctx.sql(&insert_sql).await?;
+		}
+		
+		let sql = format!(
+			"SELECT t.* FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) t \
+			 JOIN shuffle_map_{} sm ON t.rn = sm.old_rn \
+			 ORDER BY sm.new_order",
+			table_name, seed
+		);
+		let result = ctx.sql(&sql).await?;
+		
+		// Clean up
+		ctx.sql(&format!("DROP TABLE shuffle_map_{}", seed)).await?;
+		
+		Ok(result)
+	}
 }
