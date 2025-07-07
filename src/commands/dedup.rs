@@ -1,18 +1,18 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use std::collections::{HashMap, HashSet};
 use arrow::array::*;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct DedupArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Remove duplicate rows", conflicts_with = "col_wise")]
 	pub row_wise: bool,
@@ -25,26 +25,12 @@ pub struct DedupArgs {
 	
 	#[arg(long, help = "Keep first occurrence (default) vs last", default_value = "first")]
 	pub keep: String,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: DedupArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	
 	if !args.row_wise && !args.col_wise {
 		return Err(NailError::InvalidArgument(
@@ -53,18 +39,14 @@ pub async fn execute(args: DedupArgs) -> NailResult<()> {
 	}
 	
 	let result_df = if args.row_wise {
-		if args.verbose {
-			eprintln!("Removing duplicate rows");
-		}
-		deduplicate_rows(&df, args.columns.as_deref(), &args.keep, args.jobs).await?
+		args.common.log_if_verbose("Removing duplicate rows");
+		deduplicate_rows(&df, args.columns.as_deref(), &args.keep, args.common.jobs).await?
 	} else {
-		if args.verbose {
-			eprintln!("Removing duplicate columns");
-		}
+		args.common.log_if_verbose("Removing duplicate columns");
 		deduplicate_columns(&df).await?
 	};
 	
-	if args.verbose {
+	if args.common.verbose {
 		let original_rows = df.clone().count().await?;
 		let new_rows = result_df.clone().count().await?;
 		let original_cols = df.schema().fields().len();
@@ -79,17 +61,8 @@ pub async fn execute(args: DedupArgs) -> NailResult<()> {
 		}
 	}
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "dedup").await?;
 	
 	Ok(())
 }

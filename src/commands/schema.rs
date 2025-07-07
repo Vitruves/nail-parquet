@@ -1,46 +1,21 @@
 use clap::Args;
-
-use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
+use datafusion::prelude::*;
 
-// ANSI color codes (matching format.rs style)
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
-const BORDER_COLOR: &str = "\x1b[2;90m"; // Dim gray
-
-// Field colors for schema fields
-const FIELD_COLORS: &[&str] = &[
-	"\x1b[32m",   // Green
-	"\x1b[33m",   // Yellow
-	"\x1b[34m",   // Blue
-	"\x1b[35m",   // Magenta
-	"\x1b[36m",   // Cyan
-	"\x1b[91m",   // Bright red
-];
 
 #[derive(Args, Clone)]
 pub struct SchemaArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
+	#[command(flatten)]
+	pub common: CommonArgs,
 }
 
 pub async fn execute(args: SchemaArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading schema from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading schema from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let schema = df.schema();
 	
 	let schema_info: Vec<SchemaField> = schema.fields().iter()
@@ -51,97 +26,44 @@ pub async fn execute(args: SchemaArgs) -> NailResult<()> {
 		})
 		.collect();
 	
-	if args.verbose {
-		eprintln!("Schema contains {} fields", schema_info.len());
+	args.common.log_if_verbose(&format!("Schema contains {} fields", schema_info.len()));
+	
+	// Handle JSON output specially to match test expectations
+	if let Some(output_path) = &args.common.output {
+		if matches!(args.common.format, Some(crate::cli::OutputFormat::Json)) {
+			// Output JSON array directly for schema command
+			let json_content = serde_json::to_string_pretty(&schema_info)
+				.map_err(|e| crate::error::NailError::InvalidArgument(format!("JSON serialization error: {}", e)))?;
+			std::fs::write(output_path, json_content)?;
+			args.common.log_if_verbose(&format!("Schema JSON written to: {}", output_path.display()));
+			return Ok(());
+		}
 	}
 	
-	match &args.output {
-		Some(output_path) => {
-			let content = match args.format {
-				Some(crate::cli::OutputFormat::Json) => {
-					serde_json::to_string_pretty(&schema_info)?
-				},
-				_ => {
-					format_schema_as_table(&schema_info)
-				}
-			};
-			std::fs::write(output_path, content)?;
-		},
-		None => {
-			match args.format {
-				Some(crate::cli::OutputFormat::Json) => {
-					println!("{}", serde_json::to_string_pretty(&schema_info)?);
-				},
-				_ => {
-					print!("{}", format_schema_as_table(&schema_info));
-				}
-			}
-		},
-	}
+	// For other outputs, create a DataFrame
+	let ctx = SessionContext::new();
+	let schema_sql = schema_info.iter()
+		.map(|field| format!("'{}' as name, '{}' as data_type, {} as nullable", 
+			field.name.replace("'", "''"), 
+			field.data_type.replace("'", "''"), 
+			field.nullable))
+		.collect::<Vec<_>>()
+		.join(" UNION ALL SELECT ");
+	
+	let result_df = if schema_info.is_empty() {
+		ctx.sql("SELECT '' as name, '' as data_type, false as nullable WHERE 1=0").await
+			.map_err(crate::error::NailError::DataFusion)?
+	} else {
+		ctx.sql(&format!("SELECT {}", schema_sql)).await
+			.map_err(crate::error::NailError::DataFusion)?
+	};
+	
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "schema").await?;
 	
 	Ok(())
 }
 
-fn format_schema_as_table(schema_info: &[SchemaField]) -> String {
-	let mut output = String::new();
-	
-	// Get terminal width for proper formatting
-	let terminal_width = if let Some((w, _)) = term_size::dimensions() {
-		w.max(60).min(120)
-	} else {
-		80
-	};
-	
-	// Schema header
-	let header_text = " Parquet Schema ";
-	let remaining_width = terminal_width.saturating_sub(header_text.len() + 4);
-	let left_dashes = remaining_width / 2;
-	let right_dashes = remaining_width - left_dashes;
-	
-	output.push_str(&format!("{}┌{}{}{}{}",
-		BORDER_COLOR,
-		"─".repeat(left_dashes),
-		header_text,
-		"─".repeat(right_dashes),
-		RESET
-	));
-	output.push('\n');
-	output.push_str(&format!("{}│{}", BORDER_COLOR, RESET));
-	output.push('\n');
-	
-	// Field information
-	let field_name_width = 20;
-	for (idx, field) in schema_info.iter().enumerate() {
-		let field_color = FIELD_COLORS[idx % FIELD_COLORS.len()];
-		
-		// Field name
-		let field_name = format!("{}{}{:<width$}{}", BOLD, field_color, field.name, RESET, width = field_name_width);
-		
-		// Type and nullable info
-		let type_info = format!("{}{}{}", field_color, field.data_type, RESET);
-		let nullable_info = if field.nullable {
-			format!("{}nullable{}", DIM, RESET)
-		} else {
-			format!("{}NOT NULL{}", BOLD, RESET)
-		};
-		
-		output.push_str(&format!("{}│{} {} : {} ({})", 
-			BORDER_COLOR, RESET, field_name, type_info, nullable_info));
-		output.push('\n');
-	}
-	
-	// Schema footer
-	output.push_str(&format!("{}│{}", BORDER_COLOR, RESET));
-	output.push('\n');
-	output.push_str(&format!("{}└{}{}", BORDER_COLOR, "─".repeat(terminal_width.saturating_sub(2)), RESET));
-	output.push('\n');
-	
-	// Summary
-	output.push_str(&format!("{}Total fields: {}{}{}", DIM, BOLD, schema_info.len(), RESET));
-	output.push('\n');
-	
-	output
-}
 
 #[derive(serde::Serialize)]
 struct SchemaField {

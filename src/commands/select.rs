@@ -1,50 +1,34 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use regex::Regex;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct SelectArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Column names or regex patterns (comma-separated)")]
 	pub columns: Option<String>,
 	
 	#[arg(short, long, help = "Row numbers or ranges (e.g., 1,3,5-10)")]
 	pub rows: Option<String>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: SelectArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let mut result_df = df;
 	
 	if let Some(col_spec) = &args.columns {
 		let schema = result_df.schema();
 		let selected_columns = select_columns_by_pattern(schema.clone().into(), col_spec)?;
 		
-		if args.verbose {
-			eprintln!("Selecting {} columns: {:?}", selected_columns.len(), selected_columns);
-		}
+		args.common.log_if_verbose(&format!("Selecting {} columns: {:?}", selected_columns.len(), selected_columns));
 		
 		let select_exprs: Vec<Expr> = selected_columns.into_iter()
 			.map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, &name)))
@@ -56,24 +40,13 @@ pub async fn execute(args: SelectArgs) -> NailResult<()> {
 	if let Some(row_spec) = &args.rows {
 		let row_indices = parse_row_specification(row_spec)?;
 		
-		if args.verbose {
-			eprintln!("Selecting {} rows", row_indices.len());
-		}
+		args.common.log_if_verbose(&format!("Selecting {} rows", row_indices.len()));
 		
-		result_df = select_rows_by_indices(&result_df, &row_indices, args.jobs).await?;
+		result_df = select_rows_by_indices(&result_df, &row_indices, args.common.jobs).await?;
 	}
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "select").await?;
 	
 	Ok(())
 }

@@ -1,14 +1,14 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use crate::error::NailResult;
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct IdArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Create new ID column")]
 	pub create: bool,
@@ -18,47 +18,22 @@ pub struct IdArgs {
 	
 	#[arg(long, help = "ID column name", default_value = "id")]
 	pub id_col_name: String,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: IdArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	
 	let result_df = if args.create {
-		if args.verbose {
-			eprintln!("Creating ID column '{}' with prefix '{}'", args.id_col_name, args.prefix);
-		}
-		add_id_column(&df, &args.id_col_name, &args.prefix, args.jobs).await?
+		args.common.log_if_verbose(&format!("Creating ID column '{}' with prefix '{}'", args.id_col_name, args.prefix));
+		add_id_column(&df, &args.id_col_name, &args.prefix, args.common.jobs).await?
 	} else {
 		df
 	};
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "id").await?;
 	
 	Ok(())
 }

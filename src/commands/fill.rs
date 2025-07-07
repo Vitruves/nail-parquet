@@ -1,16 +1,16 @@
 use clap::Args;
 use datafusion::prelude::*;
 use datafusion::arrow::array::{Float64Array, Int64Array, Array};
-use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
 
 #[derive(Args, Clone)]
 pub struct FillArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Fill method", value_enum, default_value = "value")]
 	pub method: FillMethod,
@@ -20,18 +20,6 @@ pub struct FillArgs {
 	
 	#[arg(short, long, help = "Comma-separated column names to fill")]
 	pub columns: Option<String>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -45,11 +33,9 @@ pub enum FillMethod {
 }
 
 pub async fn execute(args: FillArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	
 	let columns = if let Some(col_spec) = &args.columns {
 		let schema = df.schema();
@@ -58,23 +44,12 @@ pub async fn execute(args: FillArgs) -> NailResult<()> {
 		df.schema().fields().iter().map(|f| f.name().clone()).collect()
 	};
 	
-	if args.verbose {
-		eprintln!("Filling missing values in {} columns using {:?} method", columns.len(), args.method);
-	}
+	args.common.log_if_verbose(&format!("Filling missing values in {} columns using {:?} method", columns.len(), args.method));
 	
-	let result_df = fill_missing_values(&df, &columns, &args.method, args.value.as_deref(), args.jobs).await?;
+	let result_df = fill_missing_values(&df, &columns, &args.method, args.value.as_deref(), args.common.jobs).await?;
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "fill").await?;
 	
 	Ok(())
 }

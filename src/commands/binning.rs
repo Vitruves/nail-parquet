@@ -1,19 +1,18 @@
 use crate::error::{NailError, NailResult};
-use crate::utils::{create_context_with_jobs, io::{read_data, write_data}, format::display_dataframe};
-use crate::cli::OutputFormat;
+use crate::utils::{create_context_with_jobs, io::read_data};
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use clap::Args;
 use datafusion::arrow::array::{Array, Float64Array, Int64Array};
 use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::*;
 use datafusion::functions_aggregate::expr_fn::{min, max, count};
 use datafusion::logical_expr::conditional_expressions::CaseBuilder;
-use std::path::PathBuf;
 
 #[derive(Args, Clone)]
 pub struct BinningArgs {
-    /// Input file
-    #[arg(help = "Input file")]
-    pub input: PathBuf,
+    #[command(flatten)]
+    pub common: CommonArgs,
 
     /// Columns to bin (comma-separated)
     #[arg(short, long, help = "Columns to bin (comma-separated)")]
@@ -43,23 +42,6 @@ pub struct BinningArgs {
     /// Include lowest value in first bin
     #[arg(long, help = "Include lowest value in first bin")]
     pub include_lowest: bool,
-
-    /// Output file (if not specified, prints to console)
-    #[arg(short, long, help = "Output file (if not specified, prints to console)")]
-    pub output: Option<PathBuf>,
-
-    /// Output format
-    #[arg(short, long, help = "Output format")]
-    #[arg(value_enum)]
-    pub format: Option<OutputFormat>,
-
-    /// Number of parallel jobs
-    #[arg(short = 'j', long, help = "Number of parallel jobs")]
-    pub jobs: Option<usize>,
-
-    /// Enable verbose output
-    #[arg(short = 'v', long, help = "Enable verbose output")]
-    pub verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -72,13 +54,11 @@ pub enum BinningMethod {
 }
 
 pub async fn execute(args: BinningArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
     // Read input data
-    let _ctx = create_context_with_jobs(args.jobs).await?;
-    let df = read_data(&args.input).await?;
+    let _ctx = create_context_with_jobs(args.common.jobs).await?;
+    let df = read_data(&args.common.input).await?;
     
     // Parse columns to bin
     let columns: Vec<&str> = args.columns.split(',').map(|s| s.trim()).collect();
@@ -137,14 +117,12 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
         }
     }
 
-    if args.verbose {
-        eprintln!("Binning columns: {:?}", columns);
-        eprintln!("Method: {:?}", args.method);
-        if let Some(edges) = &bin_edges {
-            eprintln!("Bin edges: {:?}", edges);
-        } else {
-            eprintln!("Number of bins: {}", n_bins.unwrap_or(10));
-        }
+    args.common.log_if_verbose(&format!("Binning columns: {:?}", columns));
+    args.common.log_if_verbose(&format!("Method: {:?}", args.method));
+    if let Some(edges) = &bin_edges {
+        args.common.log_if_verbose(&format!("Bin edges: {:?}", edges));
+    } else {
+        args.common.log_if_verbose(&format!("Number of bins: {}", n_bins.unwrap_or(10)));
     }
 
     // For simplicity, let's use a basic binning approach with DataFrame operations
@@ -179,9 +157,7 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
     let min_val = extract_float_value(&stats_batch[0], 0, 0)?;
     let max_val = extract_float_value(&stats_batch[0], 1, 0)?;
     
-    if args.verbose {
-        eprintln!("Column '{}' range: {} to {}", column_name, min_val, max_val);
-    }
+    args.common.log_if_verbose(&format!("Column '{}' range: {} to {}", column_name, min_val, max_val));
     
     // Calculate bin edges based on method
     let edges = match &args.method {
@@ -209,9 +185,7 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
         }
     };
 
-    if args.verbose {
-        eprintln!("Using bin edges: {:?}", edges);
-    }
+    args.common.log_if_verbose(&format!("Using bin edges: {:?}", edges));
 
     // Create binned column using a simple approach
     let mut select_exprs = vec![];
@@ -257,21 +231,8 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
     let result_df = df.select(select_exprs)?;
 
     // Display or write the results
-    if let Some(output_path) = &args.output {
-        let file_format = args.format.as_ref().map(|f| match f {
-            OutputFormat::Json => crate::utils::FileFormat::Json,
-            OutputFormat::Csv => crate::utils::FileFormat::Csv,
-            OutputFormat::Parquet => crate::utils::FileFormat::Parquet,
-            OutputFormat::Xlsx => crate::utils::FileFormat::Excel,
-            OutputFormat::Text => crate::utils::FileFormat::Parquet,
-        });
-        write_data(&result_df, output_path, file_format.as_ref()).await?;
-        if args.verbose {
-            eprintln!("Results written to: {}", output_path.display());
-        }
-    } else {
-        display_dataframe(&result_df, None, args.format.as_ref()).await?;
-    }
+    let output_handler = OutputHandler::new(&args.common);
+    output_handler.handle_output(&result_df, "binning").await?;
 
     Ok(())
 }

@@ -1,67 +1,47 @@
 use clap::Args;
-use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::parquet_utils::{get_parquet_row_count_fast, can_use_fast_metadata};
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
+use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
 pub struct CountArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
+	#[command(flatten)]
+	pub common: CommonArgs,
 }
 
 pub async fn execute(args: CountArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
 	// Use fast metadata reading for Parquet files
-	let row_count = if can_use_fast_metadata(&args.input) {
-		if args.verbose {
-			eprintln!("Using fast Parquet metadata for counting");
-		}
-		get_parquet_row_count_fast(&args.input).await?
+	let row_count = if can_use_fast_metadata(&args.common.input) {
+		args.common.log_if_verbose("Using fast Parquet metadata for counting");
+		get_parquet_row_count_fast(&args.common.input).await?
 	} else {
-		if args.verbose {
-			eprintln!("Using DataFusion for counting");
-		}
-		let df = read_data(&args.input).await?;
+		args.common.log_if_verbose("Using DataFusion for counting");
+		let df = read_data(&args.common.input).await?;
 		df.clone().count().await.map_err(crate::error::NailError::DataFusion)?
 	};
 	
-	if args.verbose {
-		eprintln!("Counted {} rows", row_count);
-	}
+	args.common.log_if_verbose(&format!("Counted {} rows", row_count));
 	
-	// Output the count
-	if let Some(output_path) = &args.output {
-		match args.format.as_ref().unwrap_or(&crate::cli::OutputFormat::Text) {
-			crate::cli::OutputFormat::Json => {
-				let json_output = format!(r#"{{"row_count": {}}}"#, row_count);
-				std::fs::write(output_path, json_output)?;
-			},
-			crate::cli::OutputFormat::Csv => {
-				let csv_output = format!("row_count\n{}", row_count);
-				std::fs::write(output_path, csv_output)?;
-			},
-			_ => {
-				std::fs::write(output_path, row_count.to_string())?;
-			}
+	// For count command, output simple number to console or structured data to file
+	match &args.common.output {
+		Some(_output_path) => {
+			// Create a DataFrame with the count result for file output
+			let ctx = SessionContext::new();
+			let result_df = ctx.sql(&format!("SELECT {} as row_count", row_count)).await
+				.map_err(crate::error::NailError::DataFusion)?;
+			
+			let output_handler = OutputHandler::new(&args.common);
+			output_handler.handle_output(&result_df, "count").await?;
 		}
-		if args.verbose {
-			eprintln!("Count written to: {}", output_path.display());
+		None => {
+			// Simple console output
+			println!("{}", row_count);
 		}
-	} else {
-		println!("{}", row_count);
 	}
 	
 	Ok(())

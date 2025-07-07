@@ -1,18 +1,18 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use rand::seq::SliceRandom;
 use rand::{rngs::StdRng, SeedableRng};
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use datafusion::arrow::array::{StringArray, DictionaryArray, Array};
 use datafusion::arrow::datatypes::UInt32Type;
 
 #[derive(Args, Clone)]
 pub struct SampleArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Number of samples", default_value = "10")]
 	pub number: usize,
@@ -22,21 +22,6 @@ pub struct SampleArgs {
 	
 	#[arg(long, help = "Column name for stratified sampling")]
 	pub stratify_by: Option<String>,
-	
-	#[arg(short, long, help = "Random seed for reproducible results")]
-	pub random: Option<u64>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -48,30 +33,25 @@ pub enum SampleMethod {
 }
 
 pub async fn execute(args: SampleArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let total_rows = df.clone().count().await?;
 	
 	if args.number >= total_rows {
-		if args.verbose {
-			eprintln!("Requested {} samples, but only {} rows available. Returning all rows.", args.number, total_rows);
-		}
-		display_dataframe(&df, args.output.as_deref(), args.format.as_ref()).await?;
+		args.common.log_if_verbose(&format!("Requested {} samples, but only {} rows available. Returning all rows.", args.number, total_rows));
+		let output_handler = OutputHandler::new(&args.common);
+		output_handler.handle_output(&df, "sample").await?;
 		return Ok(());
 	}
 	
-	if args.verbose {
-		eprintln!("Sampling {} rows from {} total using {:?} method", args.number, total_rows, args.method);
-	}
+	args.common.log_if_verbose(&format!("Sampling {} rows from {} total using {:?} method", args.number, total_rows, args.method));
 	
 	let sampled_df = match args.method {
-		SampleMethod::Random => sample_random(&df, args.number, args.random, args.jobs).await?,
+		SampleMethod::Random => sample_random(&df, args.number, args.common.random, args.common.jobs).await?,
 		SampleMethod::Stratified => {
 			if let Some(col) = &args.stratify_by {
-				sample_stratified(&df, args.number, col, args.random, args.jobs).await?
+				sample_stratified(&df, args.number, col, args.common.random, args.common.jobs).await?
 			} else {
 				return Err(NailError::InvalidArgument("--stratify-by required for stratified sampling".to_string()));
 			}
@@ -83,17 +63,8 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 		},
 	};
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&sampled_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&sampled_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&sampled_df, "sample").await?;
 	
 	Ok(())
 }

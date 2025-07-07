@@ -1,16 +1,15 @@
 use clap::Args;
 use datafusion::prelude::*;
 use datafusion::logical_expr::{lit, Expr};
-use std::path::PathBuf;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
-use crate::utils::FileFormat;
 
 #[derive(Args, Clone)]
 pub struct CreateArgs {
-    #[arg(help = "Input file")]
-    pub input: PathBuf,
+    #[command(flatten)]
+    pub common: CommonArgs,
 
     #[arg(short = 'c', long = "column", 
           help = "Column creation specs (name=expression), comma-separated.\n\
@@ -28,33 +27,17 @@ pub struct CreateArgs {
 
     #[arg(short = 'r', long = "row", help = "Row filter expression")]
     pub row_filter: Option<String>,
-
-    #[arg(short, long, help = "Output file (if not specified, prints to console)")]
-    pub output: Option<PathBuf>,
-
-    #[arg(short, long, help = "Output format", value_enum)]
-    pub format: Option<crate::cli::OutputFormat>,
-
-    #[arg(short, long, help = "Number of parallel jobs")]
-    pub jobs: Option<usize>,
-
-    #[arg(short, long, help = "Enable verbose output")]
-    pub verbose: bool,
 }
 
 pub async fn execute(args: CreateArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
-    let df = read_data(&args.input).await?;
+    let df = read_data(&args.common.input).await?;
     let mut result_df = df;
 
     // Apply row filter if specified
     if let Some(row_expr) = &args.row_filter {
-        if args.verbose {
-            eprintln!("Applying row filter: {}", row_expr);
-        }
+        args.common.log_if_verbose(&format!("Applying row filter: {}", row_expr));
         let filter_expr = parse_expression(row_expr, &result_df)?;
         result_df = result_df.filter(filter_expr)?;
     }
@@ -72,9 +55,7 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
             column_map.push((name.to_string(), expr.to_string()));
         }
 
-        if args.verbose {
-            eprintln!("Creating columns: {:?}", column_map);
-        }
+        args.common.log_if_verbose(&format!("Creating columns: {:?}", column_map));
 
         // Validate column names don't already exist
         let existing_columns: Vec<String> = result_df.schema().fields().iter()
@@ -101,17 +82,8 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
     }
 
     // Write or display result
-    if let Some(output_path) = &args.output {
-        let file_format = match args.format {
-            Some(crate::cli::OutputFormat::Json) => Some(FileFormat::Json),
-            Some(crate::cli::OutputFormat::Csv) => Some(FileFormat::Csv),
-            Some(crate::cli::OutputFormat::Parquet) => Some(FileFormat::Parquet),
-            _ => None,
-        };
-        write_data(&result_df, output_path, file_format.as_ref()).await?;
-    } else {
-        display_dataframe(&result_df, None, args.format.as_ref()).await?;
-    }
+    let output_handler = OutputHandler::new(&args.common);
+    output_handler.handle_output(&result_df, "create").await?;
 
     Ok(())
 }

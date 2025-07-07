@@ -1,56 +1,30 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use crate::error::NailResult;
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct ShuffleArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
-	
-	#[arg(short, long, help = "Random seed for reproducible results")]
-	pub random: Option<u64>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
+	#[command(flatten)]
+	pub common: CommonArgs,
 }
 
 pub async fn execute(args: ShuffleArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	
-	if args.verbose {
+	if args.common.verbose {
 		let total_rows = df.clone().count().await?;
-		eprintln!("Shuffling {} rows", total_rows);
+		args.common.log_if_verbose(&format!("Shuffling {} rows", total_rows));
 	}
 	
-	let shuffled_df = shuffle_dataframe(&df, args.random, args.jobs).await?;
+	let shuffled_df = shuffle_dataframe(&df, args.common.random, args.common.jobs).await?;
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&shuffled_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&shuffled_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&shuffled_df, "shuffle").await?;
 	
 	Ok(())
 }

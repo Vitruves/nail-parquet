@@ -3,10 +3,10 @@ use datafusion::dataframe::{DataFrame as DataFusionDataFrame, DataFrameWriteOpti
 use std::path::Path;
 use crate::error::{NailError, NailResult};
 use crate::utils::{create_context, detect_file_format, FileFormat};
-use datafusion::arrow::array::{Array, ArrayRef, StringArray, Float64Array, Int64Array, BooleanArray, RecordBatch};
+use datafusion::arrow::array::{Array, ArrayRef, StringArray, Float64Array, Int64Array, BooleanArray, Date32Array, Date64Array, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use calamine::{Reader, Xlsx, open_workbook, Data};
-use rust_xlsxwriter::Workbook;
+use rust_xlsxwriter::{Workbook, Format};
 use std::sync::Arc;
 
 pub async fn read_data(path: &Path) -> NailResult<DataFusionDataFrame> {
@@ -206,6 +206,9 @@ async fn write_excel_file(df: &DataFusionDataFrame, path: &Path) -> Result<(), d
 	// Create a new Excel workbook
 	let mut workbook = Workbook::new();
 	
+	// Create date format for Excel
+	let date_format = Format::new().set_num_format("yyyy-mm-dd");
+	
 	// Add a worksheet to the workbook
 	let worksheet = workbook.add_worksheet();
 	
@@ -250,8 +253,32 @@ async fn write_excel_file(df: &DataFusionDataFrame, path: &Path) -> Result<(), d
 								.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 						}
 					},
+					DataType::Date32 => {
+						let array = batch.column(col_idx).as_any().downcast_ref::<Date32Array>().unwrap();
+						if !array.is_null(row_idx) {
+							let days_since_epoch = array.value(row_idx);
+							// Convert days since epoch to Excel date (Excel uses days since 1900-01-01, but accounting for leap year bug)
+							// Arrow uses days since 1970-01-01, so we need to add the offset
+							let excel_date = days_since_epoch as f64 + 25569.0; // Days between 1900-01-01 and 1970-01-01
+							
+							worksheet.write_with_format(current_row, col_idx as u16, excel_date, &date_format)
+								.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+						}
+					},
+					DataType::Date64 => {
+						let array = batch.column(col_idx).as_any().downcast_ref::<Date64Array>().unwrap();
+						if !array.is_null(row_idx) {
+							let millis_since_epoch = array.value(row_idx);
+							// Convert to days since epoch and then to Excel date
+							let days_since_epoch = millis_since_epoch as f64 / (1000.0 * 60.0 * 60.0 * 24.0);
+							let excel_date = days_since_epoch + 25569.0;
+							
+							worksheet.write_with_format(current_row, col_idx as u16, excel_date, &date_format)
+								.map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+						}
+					},
 					_ => {
-						// For unsupported types, convert to string
+						// For other unsupported types, convert to string
 						let array = batch.column(col_idx);
 						if !array.is_null(row_idx) {
 							let value = format!("{:?}", array.slice(row_idx, 1));

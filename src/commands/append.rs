@@ -3,53 +3,36 @@ use datafusion::prelude::*;
 use datafusion::common::DFSchemaRef;
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct AppendArgs {
-	#[arg(help = "Input file (base table)")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Files to append (comma-separated)")]
 	pub files: String,
 	
 	#[arg(long, help = "Ignore schema mismatches")]
 	pub ignore_schema: bool,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: AppendArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading base table from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading base table from: {}", args.common.input.display()));
 	
-	let mut base_df = read_data(&args.input).await?;
+	let mut base_df = read_data(&args.common.input).await?;
 	let base_schema: DFSchemaRef = base_df.schema().clone().into();
 	
 	let append_files: Vec<&str> = args.files.split(',').map(|s| s.trim()).collect();
 	
-	if args.verbose {
-		eprintln!("Appending {} files", append_files.len());
-	}
+	args.common.log_if_verbose(&format!("Appending {} files", append_files.len()));
 	
 	for file_path in append_files {
 		let path = PathBuf::from(file_path);
 		
-		if args.verbose {
-			eprintln!("Appending: {}", path.display());
-		}
+		args.common.log_if_verbose(&format!("Appending: {}", path.display()));
 		
 		let append_df = read_data(&path).await?;
 		let append_schema: DFSchemaRef = append_df.schema().clone().into();
@@ -62,7 +45,7 @@ pub async fn execute(args: AppendArgs) -> NailResult<()> {
 		}
 		
 		let aligned_df = if args.ignore_schema {
-			align_schemas(&append_df, &base_schema, args.jobs).await?
+			align_schemas(&append_df, &base_schema, args.common.jobs).await?
 		} else {
 			append_df
 		};
@@ -70,22 +53,11 @@ pub async fn execute(args: AppendArgs) -> NailResult<()> {
 		base_df = base_df.union(aligned_df)?;
 	}
 	
-	if args.verbose {
-		let total_rows = base_df.clone().count().await?;
-		eprintln!("Final dataset contains {} rows", total_rows);
-	}
+	let total_rows = base_df.clone().count().await?;
+	args.common.log_if_verbose(&format!("Final dataset contains {} rows", total_rows));
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&base_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&base_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&base_df, "append").await?;
 	
 	Ok(())
 }

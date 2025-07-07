@@ -1,11 +1,11 @@
 use clap::Args;
-use std::path::PathBuf;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::format::display_dataframe;
+use crate::cli::CommonArgs;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
     execute,
@@ -29,37 +29,20 @@ use std::io;
 
 #[derive(Args, Clone)]
 pub struct PreviewArgs {
-    #[arg(help = "Input file")]
-    pub input: PathBuf,
+    #[command(flatten)]
+    pub common: CommonArgs,
     
     #[arg(short, long, help = "Number of rows to display", default_value = "5")]
     pub number: usize,
-    
-    #[arg(short, long, help = "Random seed for reproducible results")]
-    pub random: Option<u64>,
-    
-    #[arg(short, long, help = "Output file (if not specified, prints to console)")]
-    pub output: Option<PathBuf>,
-    
-    #[arg(short, long, help = "Output format", value_enum)]
-    pub format: Option<crate::cli::OutputFormat>,
-    
-    #[arg(short, long, help = "Number of parallel jobs")]
-    pub jobs: Option<usize>,
-    
-    #[arg(short, long, help = "Enable verbose output")]
-    pub verbose: bool,
     
     #[arg(short = 'I', long, help = "Interactive mode with scrolling (use arrow keys, q to quit)")]
     pub interactive: bool,
 }
 
 pub async fn execute(args: PreviewArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
     
-    let df = read_data(&args.input).await?;
+    let df = read_data(&args.common.input).await?;
     let total_rows = df.clone().count().await?;
     
     // If interactive mode is requested, handle it separately
@@ -69,11 +52,11 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
     
     // Non-interactive mode (original behavior)
     if total_rows <= args.number {
-        display_dataframe(&df, args.output.as_deref(), args.format.as_ref()).await?;
+        display_dataframe(&df, args.common.output.as_deref(), args.common.format.as_ref()).await?;
         return Ok(());
     }
     
-    let mut rng = match args.random {
+    let mut rng = match args.common.random {
         Some(seed) => StdRng::seed_from_u64(seed),
         None => StdRng::from_entropy(),
     };
@@ -83,11 +66,9 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
     indices.truncate(args.number);
     indices.sort();
     
-    if args.verbose {
-        eprintln!("Randomly sampling {} rows from {} total rows", args.number, total_rows);
-    }
+    args.common.log_if_verbose(&format!("Randomly sampling {} rows from {} total rows", args.number, total_rows));
     
-    let ctx = crate::utils::create_context_with_jobs(args.jobs).await?;
+    let ctx = crate::utils::create_context_with_jobs(args.common.jobs).await?;
     let table_name = "temp_table";
     ctx.register_table(table_name, df.clone().into_view())?;
     
@@ -109,13 +90,11 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
         indices_str
     );
     
-    if args.verbose {
-        eprintln!("Executing SQL: {}", sql);
-    }
+    args.common.log_if_verbose(&format!("Executing SQL: {}", sql));
     
     let result = ctx.sql(&sql).await?;
     
-    display_dataframe(&result, args.output.as_deref(), args.format.as_ref()).await?;
+    display_dataframe(&result, args.common.output.as_deref(), args.common.format.as_ref()).await?;
     
     Ok(())
 }

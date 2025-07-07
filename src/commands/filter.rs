@@ -1,32 +1,21 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::utils::column::resolve_column_name;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct FilterArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Column filter conditions (e.g., 'age>25,salary<50000')")]
 	pub columns: Option<String>,
 	
 	#[arg(short, long, help = "Row filter type", value_enum)]
 	pub rows: Option<RowFilter>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -38,38 +27,23 @@ pub enum RowFilter {
 }
 
 pub async fn execute(args: FilterArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let mut result_df = df;
 	
 	if let Some(col_conditions) = &args.columns {
-		if args.verbose {
-			eprintln!("Applying column filters: {}", col_conditions);
-		}
-		result_df = apply_column_filters(&result_df, col_conditions, args.jobs).await?;
+		args.common.log_if_verbose(&format!("Applying column filters: {}", col_conditions));
+		result_df = apply_column_filters(&result_df, col_conditions, args.common.jobs).await?;
 	}
 	
 	if let Some(row_filter) = &args.rows {
-		if args.verbose {
-			eprintln!("Applying row filter: {:?}", row_filter);
-		}
-		result_df = apply_row_filter(&result_df, row_filter, args.jobs).await?;
+		args.common.log_if_verbose(&format!("Applying row filter: {:?}", row_filter));
+		result_df = apply_row_filter(&result_df, row_filter, args.common.jobs).await?;
 	}
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "filter").await?;
 	
 	Ok(())
 }
@@ -104,19 +78,8 @@ async fn parse_condition_with_schema(condition: &str, schema: &datafusion::commo
 			let column_name_input = condition[..pos].trim();
 			let value_str = condition[pos + op.len()..].trim();
 			
-			// Find the actual column name (case-insensitive matching)
-			let actual_column_name = schema.fields().iter()
-				.find(|f| f.name().to_lowercase() == column_name_input.to_lowercase())
-				.map(|f| f.name().clone())
-				.ok_or_else(|| {
-					let available_cols: Vec<String> = schema.fields().iter()
-						.map(|f| f.name().clone())
-						.collect();
-					NailError::ColumnNotFound(format!(
-						"Column '{}' not found. Available columns: {:?}", 
-						column_name_input, available_cols
-					))
-				})?;
+			// Use the centralized column resolution utility
+			let actual_column_name = resolve_column_name(schema, column_name_input)?;
 			
 			let value_expr = if let Ok(int_val) = value_str.parse::<i64>() {
 				lit(int_val)

@@ -6,12 +6,7 @@ use crate::utils::{detect_file_format};
 
 #[derive(Args, Clone)]
 pub struct ConvertArgs {
-	#[arg(help = "Input file.\n\
-	              Supported input formats:\n\
-	              • Parquet (.parquet)\n\
-	              • CSV (.csv)\n\
-	              • JSON (.json)\n\
-	              • Excel (.xlsx)")]
+	#[arg(help = "Input file")]
 	pub input: PathBuf,
 	
 	#[arg(short, long, help = "Output file.\n\
@@ -22,11 +17,14 @@ pub struct ConvertArgs {
 	                           • Excel (.xlsx) - write support")]
 	pub output: PathBuf,
 	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
+	#[arg(long, help = "Random seed for reproducible results")]
+	pub random: Option<u64>,
 	
 	#[arg(short, long, help = "Enable verbose output")]
 	pub verbose: bool,
+	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
 }
 
 pub async fn execute(args: ConvertArgs) -> NailResult<()> {
@@ -43,15 +41,13 @@ pub async fn execute(args: ConvertArgs) -> NailResult<()> {
 	
 	let df = read_data(&args.input).await?;
 	
+	let rows = df.clone().count().await?;
+	let cols = df.schema().fields().len();
 	if args.verbose {
-		let rows = df.clone().count().await?;
-		let cols = df.schema().fields().len();
 		eprintln!("Processing {} rows, {} columns", rows, cols);
 	}
 	
 	write_data(&df, &args.output, Some(&output_format)).await?;
-	
-	// Conversion completed successfully
 	
 	if args.verbose {
 		eprintln!("Conversion completed successfully");

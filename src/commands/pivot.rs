@@ -1,16 +1,15 @@
 use crate::error::{NailError, NailResult};
-use crate::utils::{create_context_with_jobs, io::{read_data, write_data}, format::display_dataframe};
-use crate::cli::OutputFormat;
+use crate::utils::{create_context_with_jobs, io::read_data};
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use clap::Args;
 use datafusion::prelude::*;
 use datafusion::functions_aggregate::expr_fn::{sum, avg, count, min, max};
-use std::path::PathBuf;
 
 #[derive(Args, Clone)]
 pub struct PivotArgs {
-    /// Input file
-    #[arg(help = "Input file")]
-    pub input: PathBuf,
+    #[command(flatten)]
+    pub common: CommonArgs,
 
     /// Row index columns (comma-separated)
     #[arg(short, long, help = "Row index columns (comma-separated)")]
@@ -32,23 +31,6 @@ pub struct PivotArgs {
     /// Fill missing values
     #[arg(long, default_value = "0", help = "Fill missing values")]
     pub fill: String,
-
-    /// Output file (if not specified, prints to console)
-    #[arg(short, long, help = "Output file (if not specified, prints to console)")]
-    pub output: Option<PathBuf>,
-
-    /// Output format
-    #[arg(short, long, help = "Output format")]
-    #[arg(value_enum)]
-    pub format: Option<OutputFormat>,
-
-    /// Number of parallel jobs
-    #[arg(short = 'j', long, help = "Number of parallel jobs")]
-    pub jobs: Option<usize>,
-
-    /// Enable verbose output
-    #[arg(short = 'v', long, help = "Enable verbose output")]
-    pub verbose: bool,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -62,13 +44,11 @@ pub enum AggregationFunction {
 
 
 pub async fn execute(args: PivotArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
     // Read input data
-    let _ctx = create_context_with_jobs(args.jobs).await?;
-    let df = read_data(&args.input).await?;
+    let _ctx = create_context_with_jobs(args.common.jobs).await?;
+    let df = read_data(&args.common.input).await?;
     
     // Parse columns
     let index_cols: Vec<&str> = args.index.split(',').map(|s| s.trim()).collect();
@@ -162,12 +142,10 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
         ));
     }
 
-    if args.verbose {
-        eprintln!("Index columns: {:?}", index_cols);
-        eprintln!("Pivot columns: {:?}", pivot_cols);
-        eprintln!("Value columns: {:?}", value_cols);
-        eprintln!("Aggregation: {:?}", args.agg);
-    }
+    args.common.log_if_verbose(&format!("Index columns: {:?}", index_cols));
+    args.common.log_if_verbose(&format!("Pivot columns: {:?}", pivot_cols));
+    args.common.log_if_verbose(&format!("Value columns: {:?}", value_cols));
+    args.common.log_if_verbose(&format!("Aggregation: {:?}", args.agg));
 
     // For now, provide a simplified pivot implementation
     // This is a basic version that doesn't do the full pivot table functionality
@@ -202,21 +180,8 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
         .aggregate(group_exprs, vec![agg_expr.alias(&format!("{}_{}", pivot_col, value_col))])?;
 
     // Display or write the results
-    if let Some(output_path) = &args.output {
-        let file_format = args.format.as_ref().map(|f| match f {
-            OutputFormat::Json => crate::utils::FileFormat::Json,
-            OutputFormat::Csv => crate::utils::FileFormat::Csv,
-            OutputFormat::Parquet => crate::utils::FileFormat::Parquet,
-            OutputFormat::Xlsx => crate::utils::FileFormat::Excel,
-            OutputFormat::Text => crate::utils::FileFormat::Parquet,
-        });
-        write_data(&result_df, output_path, file_format.as_ref()).await?;
-        if args.verbose {
-            eprintln!("Results written to: {}", output_path.display());
-        }
-    } else {
-        display_dataframe(&result_df, None, args.format.as_ref()).await?;
-    }
+    let output_handler = OutputHandler::new(&args.common);
+    output_handler.handle_output(&result_df, "pivot").await?;
 
     Ok(())
 }

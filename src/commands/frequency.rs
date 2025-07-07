@@ -1,7 +1,8 @@
 use clap::Args;
-use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use datafusion::prelude::*;
 use datafusion::functions_aggregate::expr_fn::count;
 use arrow::array::Array;
@@ -22,32 +23,18 @@ const FIELD_COLORS: [&str; 6] = [
 
 #[derive(Args)]
 pub struct FrequencyArgs {
-    #[arg(help = "Input file")]
-    pub input: PathBuf,
+    #[command(flatten)]
+    pub common: CommonArgs,
     
     #[arg(short, long, help = "Comma-separated column names to analyze")]
     pub columns: String,
-    
-    #[arg(short, long, help = "Output file (if not specified, prints to console)")]
-    pub output: Option<PathBuf>,
-    
-    #[arg(short, long, help = "Output format (auto-detect by default)", value_enum)]
-    pub format: Option<crate::cli::OutputFormat>,
-    
-    #[arg(short, long, help = "Number of parallel jobs")]
-    pub jobs: Option<usize>,
-    
-    #[arg(short, long, help = "Enable verbose output")]
-    pub verbose: bool,
 }
 
 pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-        eprintln!("Analyzing frequency for columns: {}", args.columns);
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
+    args.common.log_if_verbose(&format!("Analyzing frequency for columns: {}", args.columns));
 
-    let df = read_data(&args.input).await?;
+    let df = read_data(&args.common.input).await?;
     
     // Parse column names
     let column_names: Vec<&str> = args.columns
@@ -72,9 +59,7 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
         }
     }
 
-    if args.verbose {
-        eprintln!("Computing frequency table for {} column(s)", column_names.len());
-    }
+    args.common.log_if_verbose(&format!("Computing frequency table for {} column(s)", column_names.len()));
 
     // Build the frequency query
     let mut group_by_cols = Vec::new();
@@ -97,28 +82,9 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
         ])?;
 
     // Display results
-    if args.output.is_some() || args.format.is_some() {
-        // Convert OutputFormat to FileFormat
-        let file_format = args.format.as_ref().map(|f| match f {
-            crate::cli::OutputFormat::Json => crate::utils::FileFormat::Json,
-            crate::cli::OutputFormat::Csv => crate::utils::FileFormat::Csv,
-            crate::cli::OutputFormat::Parquet => crate::utils::FileFormat::Parquet,
-            crate::cli::OutputFormat::Xlsx => crate::utils::FileFormat::Excel,
-            crate::cli::OutputFormat::Text => crate::utils::FileFormat::Csv, // Default to CSV for text
-        });
-        
-        // Write to file
-        if let Some(output_path) = &args.output {
-            crate::utils::io::write_data(
-                &frequency_df,
-                output_path,
-                file_format.as_ref(),
-            ).await?;
-            
-            if args.verbose {
-                eprintln!("Frequency table written to: {}", output_path.display());
-            }
-        }
+    if args.common.output.is_some() || args.common.format.is_some() {
+        let output_handler = OutputHandler::new(&args.common);
+        output_handler.handle_output(&frequency_df, "frequency").await?;
     } else {
         // Display to console with condensed format
         display_frequency_table(&frequency_df, &column_names).await?;

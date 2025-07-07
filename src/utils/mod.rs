@@ -2,10 +2,13 @@ pub mod io;
 pub mod format;
 pub mod stats;
 pub mod parquet_utils;
+pub mod output;
+pub mod column;
 
 use datafusion::prelude::*;
 use std::path::Path;
 use crate::error::{NailError, NailResult};
+
 
 pub async fn create_context() -> NailResult<SessionContext> {
 	let cpu_count = num_cpus::get();

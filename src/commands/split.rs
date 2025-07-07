@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::{read_data, write_data};
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct SplitArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Split ratios (e.g., '0.7,0.2,0.1' or '70,20,10')")]
 	pub ratio: String,
@@ -23,38 +24,22 @@ pub struct SplitArgs {
 	
 	#[arg(long, help = "Column for stratified splitting")]
 	pub stratified_by: Option<String>,
-	
-	#[arg(short, long, help = "Random seed for reproducible splits")]
-	pub random: Option<u64>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: SplitArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
 	// Create output directory if it doesn't exist
 	if !args.output_dir.exists() {
 		std::fs::create_dir_all(&args.output_dir)?;
-		if args.verbose {
-			eprintln!("Created output directory: {}", args.output_dir.display());
-		}
+		args.common.log_if_verbose(&format!("Created output directory: {}", args.output_dir.display()));
 	}
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let total_rows = df.clone().count().await?;
 	
 	let ratios = parse_ratios(&args.ratio)?;
-	let file_format = determine_output_format(&args.format, &args.input);
+	let file_format = determine_output_format(&args.common.format, &args.common.input);
 	let extension = get_extension_for_format(&file_format);
 	
 	let output_names = if let Some(names) = &args.names {
@@ -71,7 +56,7 @@ pub async fn execute(args: SplitArgs) -> NailResult<()> {
 			})
 			.collect()
 	} else {
-		generate_names(&args.splits_prefix, ratios.len(), &args.input, &args.output_dir, &extension)
+		generate_names(&args.splits_prefix, ratios.len(), &args.common.input, &args.output_dir, &extension)
 	};
 	
 	if ratios.len() != output_names.len() {
@@ -82,23 +67,19 @@ pub async fn execute(args: SplitArgs) -> NailResult<()> {
 	}
 	
 	if let Some(stratify_col) = &args.stratified_by {
-		if args.verbose {
-			eprintln!("Performing stratified split by column '{}' with ratios: {:?}", 
-				stratify_col, ratios);
-		}
-		stratified_split(&df, &ratios, &output_names, stratify_col, args.random, &file_format, args.verbose, args.jobs).await?;
+		args.common.log_if_verbose(&format!("Performing stratified split by column '{}' with ratios: {:?}", 
+			stratify_col, ratios));
+		stratified_split(&df, &ratios, &output_names, stratify_col, args.common.random, &file_format, args.common.verbose, args.common.jobs).await?;
 	} else {
-		if args.verbose {
-			eprintln!("Splitting {} rows into {} parts with ratios: {:?}", 
-				total_rows, ratios.len(), ratios);
-		}
-		random_split(&df, &ratios, &output_names, args.random, &file_format, args.verbose, args.jobs).await?;
+		args.common.log_if_verbose(&format!("Splitting {} rows into {} parts with ratios: {:?}", 
+			total_rows, ratios.len(), ratios));
+		random_split(&df, &ratios, &output_names, args.common.random, &file_format, args.common.verbose, args.common.jobs).await?;
 	}
 	
-	if args.verbose {
-		eprintln!("Split complete: {} files created in {}", output_names.len(), args.output_dir.display());
+	args.common.log_if_verbose(&format!("Split complete: {} files created in {}", output_names.len(), args.output_dir.display()));
+	if args.common.verbose {
 		for (i, output_name) in output_names.iter().enumerate() {
-			eprintln!("  Split {}: {}", i + 1, output_name.display());
+			args.common.log_if_verbose(&format!("  Split {}: {}", i + 1, output_name.display()));
 		}
 	}
 	

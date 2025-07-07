@@ -1,8 +1,8 @@
 use clap::Args;
-use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data;
-use crate::utils::format::display_dataframe;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use crate::utils::stats::{calculate_correlations, CorrelationType, select_columns_by_pattern};
 use clap::ValueEnum;
 
@@ -16,8 +16,8 @@ pub enum CorrTest {
 
 #[derive(Args, Clone)]
 pub struct CorrelationsArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Comma-separated column names or regex patterns")]
 	pub columns: Option<String>,
@@ -33,26 +33,12 @@ pub struct CorrelationsArgs {
 	
 	#[arg(long, help = "Number of decimal places for correlation values", default_value = "4")]
 	pub digits: usize,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
-    if args.verbose {
-        eprintln!("Reading data from: {}", args.input.display());
-    }
+    args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
     
-    let df = read_data(&args.input).await?;
+    let df = read_data(&args.common.input).await?;
     let schema = df.schema();
     
     let target_columns = if let Some(col_spec) = &args.columns {
@@ -128,11 +114,9 @@ pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
         numeric_columns
     };
     
-    if args.verbose {
-        eprintln!("Computing {:?} correlations for {} numeric columns: {:?}", 
-            args.correlation_type, target_columns.len(), target_columns);
-        eprintln!("Using {} decimal places for correlation values", args.digits);
-    }
+    args.common.log_if_verbose(&format!("Computing {:?} correlations for {} numeric columns: {:?}", 
+        args.correlation_type, target_columns.len(), target_columns));
+    args.common.log_if_verbose(&format!("Using {} decimal places for correlation values", args.digits));
     
     let include_tests = args.stats_tests.as_ref().map(|v| !v.is_empty()).unwrap_or(false);
 
@@ -145,7 +129,8 @@ let corr_df = calculate_correlations(
         args.digits
     ).await?;
     
-    display_dataframe(&corr_df, args.output.as_deref(), args.format.as_ref()).await?;
+    let output_handler = OutputHandler::new(&args.common);
+    output_handler.handle_output(&corr_df, "correlations").await?;
     
     Ok(())
 }

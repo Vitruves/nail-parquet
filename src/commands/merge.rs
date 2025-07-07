@@ -2,13 +2,14 @@ use clap::Args;
 use datafusion::prelude::*;
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct MergeArgs {
-	#[arg(help = "Input file (left table)")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Right table file to merge with")]
 	pub right: PathBuf,
@@ -24,27 +25,13 @@ pub struct MergeArgs {
 	
 	#[arg(long, help = "Key mapping for different column names (format: left_col=right_col)")]
 	pub key_mapping: Option<String>,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: MergeArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading left table from: {}", args.input.display());
-		eprintln!("Reading right table from: {}", args.right.display());
-	}
+	args.common.log_if_verbose(&format!("Reading left table from: {}", args.common.input.display()));
+	args.common.log_if_verbose(&format!("Reading right table from: {}", args.right.display()));
 	
-	let left_df = read_data(&args.input).await?;
+	let left_df = read_data(&args.common.input).await?;
 	let right_df = read_data(&args.right).await?;
 	
 	let join_type = if args.left_join {
@@ -93,23 +80,12 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 		return Err(NailError::InvalidArgument("Either --key or --key-mapping must be specified".to_string()));
 	};
 	
-	if args.verbose {
-		eprintln!("Performing {:?} join on left.{} = right.{}", join_type, left_key, right_key);
-	}
+	args.common.log_if_verbose(&format!("Performing {:?} join on left.{} = right.{}", join_type, left_key, right_key));
 	
-	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type, args.jobs).await?;
+	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type, args.common.jobs).await?;
 	
-	if let Some(output_path) = &args.output {
-		let file_format = match args.format {
-			Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
-			Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
-			Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
-			_ => None,
-		};
-		write_data(&result_df, output_path, file_format.as_ref()).await?;
-	} else {
-		display_dataframe(&result_df, None, args.format.as_ref()).await?;
-	}
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "merge").await?;
 	
 	Ok(())
 }

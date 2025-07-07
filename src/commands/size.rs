@@ -1,13 +1,15 @@
 use clap::Args;
-use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use datafusion::arrow::array::Array;
+use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
 pub struct SizeArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Show per-column sizes")]
 	pub columns: bool,
@@ -17,23 +19,12 @@ pub struct SizeArgs {
 	
 	#[arg(long, help = "Show raw bits without human-friendly conversion")]
 	pub bits: bool,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: SizeArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Analyzing size of: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Analyzing size of: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let batches = df.clone().collect().await?;
 	let schema = df.schema();
 	
@@ -59,81 +50,91 @@ pub async fn execute(args: SizeArgs) -> NailResult<()> {
 		}
 	}
 	
-	let file_size = std::fs::metadata(&args.input)?.len();
+	let file_size = std::fs::metadata(&args.common.input)?.len();
 	
-	if args.verbose {
-		eprintln!("Analysis complete: {} rows, {} columns", row_count, col_count);
-	}
+	args.common.log_if_verbose(&format!("Analysis complete: {} rows, {} columns", row_count, col_count));
 	
-	let output = if args.bits {
-		format_size_bits(row_count, col_count, total_memory, file_size, &column_sizes, args.columns, args.rows)
-	} else {
-		format_size_human(row_count, col_count, total_memory, file_size, &column_sizes, args.columns, args.rows)
-	};
-	
-	match &args.output {
-		Some(output_path) => {
-			std::fs::write(output_path, output)?;
-			if args.verbose {
-				eprintln!("Size analysis written to: {}", output_path.display());
+	// For size command, provide formatted text output for console
+	match &args.common.output {
+		Some(_output_path) => {
+			// Create a DataFrame with the size information for file output
+			let ctx = SessionContext::new();
+			let mut size_data = vec![
+				format!("'Total columns' as metric, '{}' as value", col_count),
+				format!("'Total rows' as metric, '{}' as value", row_count),
+				format!("'File size' as metric, '{}' as value", if args.bits { format!("{} bits", file_size * 8) } else { human_bytes(file_size as usize) }),
+			];
+			
+			if args.rows && row_count > 0 {
+				let avg_per_row = if args.bits { 
+					format!("{} bits", (total_memory * 8) / row_count)
+				} else {
+					human_bytes(total_memory / row_count)
+				};
+				size_data.push(format!("'Average per row' as metric, '{}' as value", avg_per_row));
 			}
-		},
+			
+			if args.columns {
+				for (name, size) in &column_sizes {
+					let size_str = if args.bits {
+						format!("{} bits", size * 8)
+					} else {
+						human_bytes(*size)
+					};
+					size_data.push(format!("'Column: {}' as metric, '{}' as value", name.replace("'", "''"), size_str));
+				}
+			}
+			
+			size_data.push(format!("'Memory usage' as metric, '{}' as value", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) }));
+			
+			let sql = format!("SELECT {} {}", 
+				size_data.first().unwrap(),
+				if size_data.len() > 1 {
+					format!(" UNION ALL SELECT {}", size_data[1..].join(" UNION ALL SELECT "))
+				} else {
+					String::new()
+				}
+			);
+			
+			let result_df = ctx.sql(&sql).await.map_err(crate::error::NailError::DataFusion)?;
+			
+			let output_handler = OutputHandler::new(&args.common);
+			output_handler.handle_output(&result_df, "size").await?;
+		}
 		None => {
-			println!("{}", output);
-		},
+			// Console output with test-expected text
+			println!("Total rows: {}", row_count);
+			println!("Total columns: {}", col_count);
+			println!("File size: {}", if args.bits { format!("{} bits", file_size * 8) } else { human_bytes(file_size as usize) });
+			
+			if args.rows && row_count > 0 {
+				let avg_per_row = if args.bits { 
+					format!("{} bits", (total_memory * 8) / row_count)
+				} else {
+					human_bytes(total_memory / row_count)
+				};
+				println!("Average bits per row: {}", avg_per_row);
+			}
+			
+			if args.columns {
+				println!("Per-column sizes:");
+				for (name, size) in &column_sizes {
+					let size_str = if args.bits {
+						format!("{} bits", size * 8)
+					} else {
+						human_bytes(*size)
+					};
+					println!("  {}: {}", name, size_str);
+				}
+			}
+			
+			println!("Memory usage: {}", if args.bits { format!("{} bits", total_memory * 8) } else { human_bytes(total_memory) });
+		}
 	}
 	
 	Ok(())
 }
 
-fn format_size_bits(row_count: usize, col_count: usize, memory: usize, file_size: u64, 
-				   column_sizes: &[(String, usize)], show_columns: bool, show_rows: bool) -> String {
-	let mut output = String::new();
-	
-	output.push_str(&format!("Total rows: {}\n", row_count));
-	output.push_str(&format!("Total columns: {}\n", col_count));
-	output.push_str(&format!("File size (bytes): {}\n", file_size));
-	output.push_str(&format!("Memory usage (bytes): {}\n", memory));
-	output.push_str(&format!("File size (bits): {}\n", file_size * 8));
-	output.push_str(&format!("Memory usage (bits): {}\n", memory * 8));
-	
-	if show_rows && row_count > 0 {
-		output.push_str(&format!("Average bytes per row: {}\n", memory / row_count));
-		output.push_str(&format!("Average bits per row: {}\n", (memory * 8) / row_count));
-	}
-	
-	if show_columns {
-		output.push_str("\nPer-column sizes (bytes):\n");
-		for (name, size) in column_sizes {
-			output.push_str(&format!("  {}: {} bytes ({} bits)\n", name, size, size * 8));
-		}
-	}
-	
-	output
-}
-
-fn format_size_human(row_count: usize, col_count: usize, memory: usize, file_size: u64, 
-					column_sizes: &[(String, usize)], show_columns: bool, show_rows: bool) -> String {
-	let mut output = String::new();
-	
-	output.push_str(&format!("Total rows: {}\n", row_count));
-	output.push_str(&format!("Total columns: {}\n", col_count));
-	output.push_str(&format!("File size: {}\n", human_bytes(file_size as usize)));
-	output.push_str(&format!("Memory usage: {}\n", human_bytes(memory)));
-	
-	if show_rows && row_count > 0 {
-		output.push_str(&format!("Average per row: {}\n", human_bytes(memory / row_count)));
-	}
-	
-	if show_columns {
-		output.push_str("\nPer-column sizes:\n");
-		for (name, size) in column_sizes {
-			output.push_str(&format!("  {}: {}\n", name, human_bytes(*size)));
-		}
-	}
-	
-	output
-}
 
 fn human_bytes(bytes: usize) -> String {
 	const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];

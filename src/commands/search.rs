@@ -1,15 +1,15 @@
 use clap::Args;
 use datafusion::prelude::*;
-use std::path::PathBuf;
-use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data;
-use crate::utils::format::display_dataframe;
+use crate::utils::output::OutputHandler;
+use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
+use crate::error::{NailError, NailResult};
 
 #[derive(Args, Clone)]
 pub struct SearchArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(long, help = "Value to search for")]
 	pub value: String,
@@ -25,26 +25,12 @@ pub struct SearchArgs {
 	
 	#[arg(long, help = "Exact match only (no partial matches)")]
 	pub exact: bool,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Number of parallel jobs")]
-	pub jobs: Option<usize>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: SearchArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Searching in: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Searching in: {}", args.common.input.display()));
 	
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let schema = df.schema();
 	
 	let search_columns = if let Some(col_spec) = &args.columns {
@@ -53,18 +39,17 @@ pub async fn execute(args: SearchArgs) -> NailResult<()> {
 		schema.fields().iter().map(|f| f.name().clone()).collect()
 	};
 	
-	if args.verbose {
-		eprintln!("Searching for '{}' in {} columns: {:?}", 
-			args.value, search_columns.len(), search_columns);
-	}
+	args.common.log_if_verbose(&format!("Searching for '{}' in {} columns: {:?}", 
+		args.value, search_columns.len(), search_columns));
 	
 	let result_df = if args.rows {
-		search_return_row_numbers(&df, &args.value, &search_columns, args.ignore_case, args.exact, args.jobs).await?
+		search_return_row_numbers(&df, &args.value, &search_columns, args.ignore_case, args.exact, args.common.jobs).await?
 	} else {
-		search_return_matching_rows(&df, &args.value, &search_columns, args.ignore_case, args.exact, args.jobs).await?
+		search_return_matching_rows(&df, &args.value, &search_columns, args.ignore_case, args.exact, args.common.jobs).await?
 	};
 	
-	display_dataframe(&result_df, args.output.as_deref(), args.format.as_ref()).await?;
+	let output_handler = OutputHandler::new(&args.common);
+	output_handler.handle_output(&result_df, "search").await?;
 	
 	Ok(())
 }

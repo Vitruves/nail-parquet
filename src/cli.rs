@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(name = "nail")]
 #[command(about = "A fast data utility written in Rust")]
 #[command(long_about = "Nail, a parquet command-line tool for data manipulation, analysis, and format conversion.")]
-#[command(version = "1.5.1")]
+#[command(version = "1.6.0")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()
@@ -64,6 +64,35 @@ pub struct GlobalArgs {
 	
 	#[arg(short, long, help = "Number of parallel jobs")]
 	pub jobs: Option<usize>,
+}
+
+#[derive(clap::Args, Clone)]
+pub struct CommonArgs {
+	#[arg(help = "Input file")]
+	pub input: PathBuf,
+	
+	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
+	pub output: Option<PathBuf>,
+	
+	#[arg(short, long, help = "Output format (auto-detect by default)", value_enum)]
+	pub format: Option<OutputFormat>,
+	
+	#[arg(long, help = "Random seed for reproducible results")]
+	pub random: Option<u64>,
+	
+	#[arg(short, long, help = "Enable verbose output")]
+	pub verbose: bool,
+	
+	#[arg(short, long, help = "Number of parallel jobs")]
+	pub jobs: Option<usize>,
+}
+
+impl CommonArgs {
+	pub fn log_if_verbose(&self, message: &str) {
+		if self.verbose {
+			eprintln!("{}", message);
+		}
+	}
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]

@@ -1,35 +1,24 @@
 use clap::Args;
-use std::path::PathBuf;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
-use crate::utils::format::display_dataframe;
+use crate::utils::output::OutputHandler;
 use crate::utils::parquet_utils::{get_parquet_row_count_fast, can_use_fast_metadata};
+use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct TailArgs {
-	#[arg(help = "Input file")]
-	pub input: PathBuf,
+	#[command(flatten)]
+	pub common: CommonArgs,
 	
 	#[arg(short, long, help = "Number of rows to display", default_value = "5")]
 	pub number: usize,
-	
-	#[arg(short, long, help = "Output file (if not specified, prints to console)")]
-	pub output: Option<PathBuf>,
-	
-	#[arg(short, long, help = "Output format", value_enum)]
-	pub format: Option<crate::cli::OutputFormat>,
-	
-	#[arg(short, long, help = "Enable verbose output")]
-	pub verbose: bool,
 }
 
 pub async fn execute(args: TailArgs) -> NailResult<()> {
-	if args.verbose {
-		eprintln!("Reading data from: {}", args.input.display());
-	}
+	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
 	// Optimize for Parquet files by using metadata for row counting
-	if can_use_fast_metadata(&args.input) {
+	if can_use_fast_metadata(&args.common.input) {
 		execute_parquet_optimized(args).await
 	} else {
 		execute_fallback(args).await
@@ -41,50 +30,48 @@ async fn execute_parquet_optimized(args: TailArgs) -> NailResult<()> {
 	use crate::utils::create_context;
 	
 	// Fast row count using Parquet metadata
-	let total_rows = get_parquet_row_count_fast(&args.input).await?;
+	let total_rows = get_parquet_row_count_fast(&args.common.input).await?;
 	
-	if args.verbose {
-		eprintln!("Total rows (from metadata): {}", total_rows);
-	}
+	args.common.log_if_verbose(&format!("Total rows (from metadata): {}", total_rows));
 	
 	if total_rows <= args.number {
 		// Read all data if we need all rows anyway
-		let df = read_data(&args.input).await?;
-		display_dataframe(&df, args.output.as_deref(), args.format.as_ref()).await?;
+		let df = read_data(&args.common.input).await?;
+		let output_handler = OutputHandler::new(&args.common);
+		output_handler.handle_output(&df, "tail").await?;
 	} else {
 		// Use optimized limit/offset for tail operation
 		let ctx = create_context().await?;
-		let df = ctx.read_parquet(args.input.to_str().unwrap(), ParquetReadOptions::default()).await
+		let df = ctx.read_parquet(args.common.input.to_str().unwrap(), ParquetReadOptions::default()).await
 			.map_err(crate::error::NailError::DataFusion)?;
 		
 		let skip_rows = total_rows - args.number;
 		let tail_df = df.limit(skip_rows, Some(args.number)).map_err(crate::error::NailError::DataFusion)?;
 		
-		if args.verbose {
-			eprintln!("Displaying last {} rows (total: {})", args.number, total_rows);
-		}
+		args.common.log_if_verbose(&format!("Displaying last {} rows (total: {})", args.number, total_rows));
 		
-		display_dataframe(&tail_df, args.output.as_deref(), args.format.as_ref()).await?;
+		let output_handler = OutputHandler::new(&args.common);
+		output_handler.handle_output(&tail_df, "tail").await?;
 	}
 	
 	Ok(())
 }
 
 async fn execute_fallback(args: TailArgs) -> NailResult<()> {
-	let df = read_data(&args.input).await?;
+	let df = read_data(&args.common.input).await?;
 	let total_rows = df.clone().count().await.map_err(crate::error::NailError::DataFusion)?;
 	
+	let output_handler = OutputHandler::new(&args.common);
+	
 	if total_rows <= args.number {
-		display_dataframe(&df, args.output.as_deref(), args.format.as_ref()).await?;
+		output_handler.handle_output(&df, "tail").await?;
 	} else {
 		let skip_rows = total_rows - args.number;
 		let tail_df = df.limit(skip_rows, Some(args.number)).map_err(crate::error::NailError::DataFusion)?;
 		
-		if args.verbose {
-			eprintln!("Displaying last {} rows (total: {})", args.number, total_rows);
-		}
+		args.common.log_if_verbose(&format!("Displaying last {} rows (total: {})", args.number, total_rows));
 		
-		display_dataframe(&tail_df, args.output.as_deref(), args.format.as_ref()).await?;
+		output_handler.handle_output(&tail_df, "tail").await?;
 	}
 	
 	Ok(())
