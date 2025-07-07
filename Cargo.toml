@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.6.1"
+version = "1.6.2"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "A fast parquet utility written in Rust"
