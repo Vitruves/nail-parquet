@@ -75,7 +75,7 @@ async fn search_return_matching_rows(
 				"Column '{}' not found in schema", column
 			)))?;
 		
-		let col_expr = col(column);
+		let col_expr = col(field.name());
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
@@ -160,7 +160,7 @@ async fn search_return_row_numbers(
 				"Column '{}' not found in schema", column
 			)))?;
 		
-		let col_expr = col(column);
+		let col_expr = col(field.name());
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
