@@ -71,7 +71,8 @@ async fn search_return_matching_rows(
 		let field = schema.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(column);
+		// Use qualified column name to avoid case sensitivity issues on Linux
+		let col_expr = col(format!("\"{}\"", column));
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
@@ -152,7 +153,8 @@ async fn search_return_row_numbers(
 		let field = schema.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(column);
+		// Use qualified column name to avoid case sensitivity issues on Linux
+		let col_expr = col(format!("\"{}\"", column));
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
