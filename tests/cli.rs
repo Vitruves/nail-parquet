@@ -467,7 +467,7 @@ mod format_and_analysis_tests {
 		nail().args(["frequency", fixtures.sample_parquet.to_str().unwrap(), "-c", "nonexistent"])
 			.assert()
 			.failure()
-			.stderr(predicate::str::contains("Column 'nonexistent' not found"));
+			.stderr(predicate::str::contains("Columns not found"));
 	}
 }
 

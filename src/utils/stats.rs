@@ -29,16 +29,23 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 	for pattern in &patterns {
 		let mut found = false;
 		
+		// Strip quotes from pattern if present
+		let clean_pattern = if pattern.starts_with('"') && pattern.ends_with('"') && pattern.len() > 1 {
+			&pattern[1..pattern.len()-1]
+		} else {
+			pattern
+		};
+		
 		for field in schema.fields() {
 			let field_name = field.name();
 			
-			if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
-				let regex = Regex::new(pattern)?;
+			if clean_pattern.contains('*') || clean_pattern.contains('^') || clean_pattern.contains('$') {
+				let regex = Regex::new(clean_pattern)?;
 				if regex.is_match(field_name) {
 					selected.push(field_name.clone());
 					found = true;
 				}
-			} else if field_name == *pattern {
+			} else if field_name == clean_pattern {
 				selected.push(field_name.clone());
 				found = true;
 				break;
@@ -49,15 +56,15 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 			for field in schema.fields() {
 				let field_name = field.name();
 				
-				if pattern.contains('*') || pattern.contains('^') || pattern.contains('$') {
-					let case_insensitive_pattern = format!("(?i){}", pattern);
+				if clean_pattern.contains('*') || clean_pattern.contains('^') || clean_pattern.contains('$') {
+					let case_insensitive_pattern = format!("(?i){}", clean_pattern);
 					if let Ok(regex) = Regex::new(&case_insensitive_pattern) {
 						if regex.is_match(field_name) {
 							selected.push(field_name.clone());
 							found = true;
 						}
 					}
-				} else if field_name.to_lowercase() == pattern.to_lowercase() {
+				} else if field_name.to_lowercase() == clean_pattern.to_lowercase() {
 					selected.push(field_name.clone());
 					found = true;
 					break;
@@ -66,7 +73,7 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 		}
 		
 		if !found {
-			not_found.push(*pattern);
+			not_found.push(clean_pattern);
 		}
 	}
 	

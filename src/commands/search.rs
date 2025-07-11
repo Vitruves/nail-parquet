@@ -68,14 +68,10 @@ async fn search_return_matching_rows(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		// Find the field by iterating through all fields since column names are already resolved
-		let field = schema.fields().iter()
-			.find(|f| f.name() == column)
-			.ok_or_else(|| NailError::ColumnNotFound(format!(
-				"Column '{}' not found in schema", column
-			)))?;
+		let field = schema.field_with_name(None, column)
+			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(field.name());
+		let col_expr = col(column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
@@ -153,14 +149,10 @@ async fn search_return_row_numbers(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		// Find the field by iterating through all fields since column names are already resolved
-		let field = schema.fields().iter()
-			.find(|f| f.name() == column)
-			.ok_or_else(|| NailError::ColumnNotFound(format!(
-				"Column '{}' not found in schema", column
-			)))?;
+		let field = schema.field_with_name(None, column)
+			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(field.name());
+		let col_expr = col(column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
