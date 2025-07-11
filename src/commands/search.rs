@@ -68,8 +68,12 @@ async fn search_return_matching_rows(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let field = schema.field_with_name(None, column)
-			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
+		// Find the field by iterating through all fields since column names are already resolved
+		let field = schema.fields().iter()
+			.find(|f| f.name() == column)
+			.ok_or_else(|| NailError::ColumnNotFound(format!(
+				"Column '{}' not found in schema", column
+			)))?;
 		
 		let col_expr = col(column);
 		
@@ -149,8 +153,12 @@ async fn search_return_row_numbers(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let field = schema.field_with_name(None, column)
-			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
+		// Find the field by iterating through all fields since column names are already resolved
+		let field = schema.fields().iter()
+			.find(|f| f.name() == column)
+			.ok_or_else(|| NailError::ColumnNotFound(format!(
+				"Column '{}' not found in schema", column
+			)))?;
 		
 		let col_expr = col(column);
 		
