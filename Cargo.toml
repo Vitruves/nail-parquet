@@ -29,7 +29,7 @@ crossterm = "0.27"
 ratatui = { version = "0.24", default-features = false, features = ["crossterm"] }
 calamine = "0.26"
 rust_xlsxwriter = "0.88"
-colored = "*"
+colored = "3.0.0"
 
 
 [profile.release]
