@@ -53,7 +53,8 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
     let mut group_by_cols = Vec::new();
     
     for col_name in &resolved_column_names {
-        group_by_cols.push(col(col_name));
+        // Use qualified column name to avoid case sensitivity issues on Linux
+        group_by_cols.push(col(format!("\"{}\"", col_name)));
     }
     
     // Execute the frequency query
