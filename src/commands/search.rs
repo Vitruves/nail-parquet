@@ -1,9 +1,11 @@
 use clap::Args;
 use datafusion::prelude::*;
+use datafusion::common::DFSchemaRef;
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
+use crate::utils::column::resolve_column_name;
 use crate::error::{NailError, NailResult};
 use datafusion::logical_expr::{ExprSchemable, expr::ScalarFunction};
 
@@ -32,10 +34,10 @@ pub async fn execute(args: SearchArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Searching in: {}", args.common.input.display()));
 	
 	let df = read_data(&args.common.input).await?;
-	let schema = df.schema();
+	let schema: DFSchemaRef = df.schema().clone().into();
 	
 	let search_columns = if let Some(col_spec) = &args.columns {
-		select_columns_by_pattern(schema.clone().into(), col_spec)?
+		select_columns_by_pattern(schema.clone(), col_spec)?
 	} else {
 		schema.fields().iter().map(|f| f.name().clone()).collect()
 	};
@@ -65,11 +67,13 @@ async fn search_return_matching_rows(
 ) -> NailResult<DataFrame> {
 	let mut conditions = Vec::new();
 	
+	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let field = df.schema().field_with_name(None, column)
-			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
+		let resolved_column = resolve_column_name(&schema, column)?;
+		let field = df.schema().field_with_name(None, &resolved_column)
+			.map_err(|_| NailError::ColumnNotFound(resolved_column.clone()))?;
 		
-		let col_expr = col(column);
+		let col_expr = col(&resolved_column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
@@ -145,11 +149,13 @@ async fn search_return_row_numbers(
 	// Build search conditions the same way as in search_return_matching_rows
 	let mut conditions = Vec::new();
 	
+	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let field = df.schema().field_with_name(None, column)
-			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
+		let resolved_column = resolve_column_name(&schema, column)?;
+		let field = df.schema().field_with_name(None, &resolved_column)
+			.map_err(|_| NailError::ColumnNotFound(resolved_column.clone()))?;
 		
-		let col_expr = col(column);
+		let col_expr = col(&resolved_column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {

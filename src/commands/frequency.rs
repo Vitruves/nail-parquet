@@ -2,6 +2,7 @@ use clap::Args;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
+use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
 use datafusion::prelude::*;
 use datafusion::functions_aggregate::expr_fn::count;
@@ -49,29 +50,22 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
         ));
     }
 
-    // Validate that all columns exist
-    let schema = df.schema();
+    // Validate that all columns exist and resolve their actual names
+    let schema = df.schema().clone().into();
+    let mut resolved_column_names = Vec::new();
     for col_name in &column_names {
-        if !schema.has_column_with_unqualified_name(col_name) {
-            return Err(crate::error::NailError::InvalidArgument(
-                format!("Column '{}' does not exist", col_name)
-            ));
-        }
+        let actual_name = resolve_column_name(&schema, col_name)?;
+        resolved_column_names.push(actual_name);
     }
 
     args.common.log_if_verbose(&format!("Computing frequency table for {} column(s)", column_names.len()));
 
-    // Build the frequency query
+    // Build the frequency query using resolved column names
     let mut group_by_cols = Vec::new();
-    let mut select_cols = Vec::new();
     
-    for col_name in &column_names {
-        group_by_cols.push(col(*col_name));
-        select_cols.push(col(*col_name));
+    for col_name in &resolved_column_names {
+        group_by_cols.push(col(col_name));
     }
-    
-    // Add count column
-    select_cols.push(count(lit(1)).alias("frequency"));
     
     // Execute the frequency query
     let frequency_df = df
@@ -87,13 +81,13 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
         output_handler.handle_output(&frequency_df, "frequency").await?;
     } else {
         // Display to console with condensed format
-        display_frequency_table(&frequency_df, &column_names).await?;
+        display_frequency_table(&frequency_df, &resolved_column_names).await?;
     }
 
     Ok(())
 }
 
-async fn display_frequency_table(df: &DataFrame, column_names: &[&str]) -> NailResult<()> {
+async fn display_frequency_table(df: &DataFrame, column_names: &[String]) -> NailResult<()> {
     let batches = df.clone().collect().await?;
     
     if batches.is_empty() {

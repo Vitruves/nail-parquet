@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
+use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
@@ -81,14 +82,14 @@ async fn align_schemas(df: &DataFrame, target_schema: &datafusion::common::DFSch
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
-	let current_schema = df.schema();
+	let current_schema: DFSchemaRef = df.schema().clone().into();
 	let mut select_exprs = Vec::new();
 	
 	for target_field in target_schema.fields() {
 		let target_name = target_field.name();
 		
-		if let Ok(_current_field) = current_schema.field_with_name(None, target_name) {
-			select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, target_name)));
+		if let Ok(resolved_name) = resolve_column_name(&current_schema, target_name) {
+			select_exprs.push(Expr::Column(datafusion::common::Column::new(None::<String>, &resolved_name)));
 		} else {
 			// For missing columns, use typed NULL values instead of default values
 			let null_expr = match target_field.data_type() {

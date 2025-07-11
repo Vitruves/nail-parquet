@@ -1,6 +1,7 @@
 use clap::Args;
 use crate::error::NailResult;
 use serde::{Deserialize, Serialize};
+use colored::Colorize;
 
 #[derive(Args, Clone)]
 pub struct UpdateArgs {
@@ -22,6 +23,22 @@ struct CrateDetails {
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CRATE_NAME: &str = "nail-parquet";
+
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+///////////////////// RELEASE NOTE HERE /////////////////////////////////////////////////
+// Write your release notes using concat! for multiple lines:
+
+const RELEASE_NOTE: &str = concat!(
+	"Release note version 1.6.3:\n",
+    "Added outliers and metadata commands\n",
+    "Fixed diverse bugs involving column flags on Linux\n", 
+    "Enhanced error handling and user experience"
+);
+
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
 
 pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 	if args.verbose {
@@ -70,20 +87,23 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 	
 	// Compare versions
 	if is_newer_version(latest_version, CURRENT_VERSION) {
-		println!("🎉 A newer version is available!");
-		println!("Current version: {}", CURRENT_VERSION);
-		println!("Latest version:  {}", latest_version);
+		println!("{}", "🎉 A newer version is available!".bright_green().bold());
+		println!("{} {}", "Current version:".cyan(), format!("{}", CURRENT_VERSION).yellow());
+		println!("{}", RELEASE_NOTE.dimmed());
+		println!("{} {}", "Latest version: ".cyan(), latest_version.bright_green().bold());
 		println!();
-		println!("To update, run:");
-		println!("  cargo install {}", CRATE_NAME);
+		println!("{}", "To update, run:".bright_blue());
+		println!("  {}", format!("cargo install {}", CRATE_NAME).bright_white().bold());
 		println!();
-		println!("Or if you installed via other means, check:");
-		println!("  https://github.com/Vitruves/nail-parquet/releases");
+		println!("{}", "Or if you installed via other means, check:".bright_blue());
+		println!("  {}", "https://github.com/Vitruves/nail-parquet/releases".bright_white().underline());
 	} else if latest_version == CURRENT_VERSION {
-		println!("✅ You are running the latest version ({})!", CURRENT_VERSION);
+		println!("{}", format!("✅ You are running the latest version {}!", CURRENT_VERSION).bright_green().bold());
+		println!("{}", RELEASE_NOTE.dimmed());
 	} else {
-		println!("🚀 You are running a development version ({})!", CURRENT_VERSION);
-		println!("Latest stable version: {}", latest_version);
+		println!("{}", format!("🚀 You are running a development version {}!", CURRENT_VERSION).bright_yellow().bold());
+		println!("{}", RELEASE_NOTE.dimmed());
+		println!("{} {}", "Latest stable version:".cyan(), latest_version.bright_green());
 	}
 	
 	Ok(())
