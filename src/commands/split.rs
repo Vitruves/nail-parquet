@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::{read_data, write_data};
+use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
@@ -102,19 +103,8 @@ async fn stratified_split(
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 	
-	let schema = df.schema();
-	let actual_col_name = schema.fields().iter()
-		.find(|f| f.name().to_lowercase() == stratify_col.to_lowercase())
-		.map(|f| f.name().clone())
-		.ok_or_else(|| {
-			let available_cols: Vec<String> = schema.fields().iter()
-				.map(|f| f.name().clone())
-				.collect();
-			NailError::ColumnNotFound(format!(
-				"Stratification column '{}' not found. Available columns: {:?}", 
-				stratify_col, available_cols
-			))
-		})?;
+	let schema = df.schema().clone().into();
+	let actual_col_name = resolve_column_name(&schema, stratify_col)?;
 	
 	let distinct_sql = format!(
 		"SELECT DISTINCT {} as category, COUNT(*) as count FROM {} WHERE {} IS NOT NULL GROUP BY {}",

@@ -2,7 +2,7 @@ use clap::Args;
 use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
-use crate::utils::column::resolve_column_name;
+use crate::utils::stats::select_columns_by_pattern;
 use crate::cli::CommonArgs;
 use datafusion::prelude::*;
 use datafusion::functions_aggregate::expr_fn::count;
@@ -37,28 +37,17 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
 
     let df = read_data(&args.common.input).await?;
     
-    // Parse column names
-    let column_names: Vec<&str> = args.columns
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+    // Parse and resolve column names using the standard utility
+    let schema = df.schema().clone().into();
+    let resolved_column_names = select_columns_by_pattern(schema, &args.columns)?;
     
-    if column_names.is_empty() {
+    if resolved_column_names.is_empty() {
         return Err(crate::error::NailError::InvalidArgument(
             "No column names provided".to_string()
         ));
     }
 
-    // Validate that all columns exist and resolve their actual names
-    let schema = df.schema().clone().into();
-    let mut resolved_column_names = Vec::new();
-    for col_name in &column_names {
-        let actual_name = resolve_column_name(&schema, col_name)?;
-        resolved_column_names.push(actual_name);
-    }
-
-    args.common.log_if_verbose(&format!("Computing frequency table for {} column(s)", column_names.len()));
+    args.common.log_if_verbose(&format!("Computing frequency table for {} column(s)", resolved_column_names.len()));
 
     // Build the frequency query using resolved column names
     let mut group_by_cols = Vec::new();

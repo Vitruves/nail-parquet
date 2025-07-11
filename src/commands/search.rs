@@ -5,7 +5,6 @@ use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
-use crate::utils::column::resolve_column_name;
 use crate::error::{NailError, NailResult};
 use datafusion::logical_expr::{ExprSchemable, expr::ScalarFunction};
 
@@ -69,11 +68,10 @@ async fn search_return_matching_rows(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let resolved_column = resolve_column_name(&schema, column)?;
-		let field = df.schema().field_with_name(None, &resolved_column)
-			.map_err(|_| NailError::ColumnNotFound(resolved_column.clone()))?;
+		let field = schema.field_with_name(None, column)
+			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(&resolved_column);
+		let col_expr = col(column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
@@ -151,11 +149,10 @@ async fn search_return_row_numbers(
 	
 	let schema: DFSchemaRef = df.schema().clone().into();
 	for column in columns {
-		let resolved_column = resolve_column_name(&schema, column)?;
-		let field = df.schema().field_with_name(None, &resolved_column)
-			.map_err(|_| NailError::ColumnNotFound(resolved_column.clone()))?;
+		let field = schema.field_with_name(None, column)
+			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 		
-		let col_expr = col(&resolved_column);
+		let col_expr = col(column);
 		
 		let condition = match field.data_type() {
 			datafusion::arrow::datatypes::DataType::Utf8 => {
