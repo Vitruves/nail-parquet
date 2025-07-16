@@ -774,7 +774,7 @@ mod new_command_tests {
 	}
 
 	#[test]
-	fn test_binning_multiple_columns_error() {
+	fn test_binning_multiple_columns_works() {
 		let fixtures = TestFixtures::new();
 		
 		nail()
@@ -784,8 +784,7 @@ mod new_command_tests {
 				"-c", "id,value"
 			])
 			.assert()
-			.failure()
-			.stderr(predicate::str::contains("Multiple column binning not yet implemented"));
+			.success();
 	}
 
 	#[test]
@@ -852,7 +851,7 @@ mod new_command_tests {
 	}
 
 	#[test]
-	fn test_binning_equal_frequency_not_implemented() {
+	fn test_binning_equal_frequency_works() {
 		let fixtures = TestFixtures::new();
 		
 		nail()
@@ -863,8 +862,7 @@ mod new_command_tests {
 				"--method", "equal-frequency"
 			])
 			.assert()
-			.failure()
-			.stderr(predicate::str::contains("Equal frequency binning not yet implemented"));
+			.success();
 	}
 
 	// PIVOT COMMAND TESTS
@@ -956,7 +954,7 @@ mod new_command_tests {
 	}
 
 	#[test]
-	fn test_pivot_multiple_columns_error() {
+	fn test_pivot_multiple_columns_works() {
 		let fixtures = TestFixtures::new();
 		
 		nail()
@@ -968,12 +966,11 @@ mod new_command_tests {
 				"-l", "value"
 			])
 			.assert()
-			.failure()
-			.stderr(predicate::str::contains("Multiple pivot columns not yet implemented"));
+			.success();
 	}
 
 	#[test]
-	fn test_pivot_multiple_values_error() {
+	fn test_pivot_multiple_values_works() {
 		let fixtures = TestFixtures::new();
 		
 		nail()
@@ -985,8 +982,7 @@ mod new_command_tests {
 				"-l", "value,id"  // Multiple value columns
 			])
 			.assert()
-			.failure()
-			.stderr(predicate::str::contains("Multiple value columns not yet implemented"));
+			.success();
 	}
 
 	#[test]
@@ -1024,7 +1020,7 @@ mod new_command_tests {
 	}
 
 	#[test]
-	fn test_pivot_no_numeric_columns() {
+	fn test_pivot_auto_detect_value_columns() {
 		let fixtures = TestFixtures::new();
 		
 		nail()
@@ -1033,11 +1029,10 @@ mod new_command_tests {
 				fixtures.sample_parquet.to_str().unwrap(),
 				"-i", "name",
 				"-c", "category"
-				// No value columns specified, should auto-detect but find multiple available
+				// No value columns specified, should auto-detect
 			])
 			.assert()
-			.failure()
-			.stderr(predicate::str::contains("Multiple value columns not yet implemented"));
+			.success();
 	}
 
 	// Integration tests combining multiple features

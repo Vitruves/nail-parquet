@@ -40,7 +40,7 @@ pub async fn execute(args: DedupArgs) -> NailResult<()> {
 		deduplicate_rows(&df, args.columns.as_deref(), &args.keep, args.common.jobs).await?
 	} else {
 		args.common.log_if_verbose("Removing duplicate columns");
-		deduplicate_columns(&df).await?
+		deduplicate_columns(&df, &args.keep).await?
 	};
 	
 	if args.common.verbose {
@@ -135,33 +135,149 @@ async fn deduplicate_rows(df: &DataFrame, columns: Option<&str>, keep: &str, job
 	Ok(result_df)
 }
 
-async fn deduplicate_columns(df: &DataFrame) -> NailResult<DataFrame> {
+async fn deduplicate_columns(df: &DataFrame, keep: &str) -> NailResult<DataFrame> {
 	let schema = df.schema();
-	let mut unique_columns = Vec::new();
-	let mut seen_names = HashSet::new();
-	let mut duplicates = Vec::new();
+	let field_names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
 	
-	for field in schema.fields() {
-		let field_name = field.name();
+	// First, check for duplicate column names
+	let mut seen_names = HashSet::new();
+	let mut name_duplicates = Vec::new();
+	
+	for field_name in &field_names {
 		if !seen_names.contains(field_name) {
 			seen_names.insert(field_name.clone());
-			unique_columns.push(Expr::Column(datafusion::common::Column::new(None::<String>, field_name)));
 		} else {
-			duplicates.push(field_name.clone());
+			name_duplicates.push(field_name.clone());
 		}
 	}
 	
 	// Error out if there are duplicate column names to prevent silent data loss
-	if !duplicates.is_empty() {
+	if !name_duplicates.is_empty() {
 		return Err(NailError::InvalidArgument(format!(
 			"Duplicate column names found: {:?}. This could result in data loss. \
 			Please use the 'rename' command to resolve column name conflicts before deduplicating.",
-			duplicates
+			name_duplicates
 		)));
+	}
+	
+	// Now check for columns with identical content
+	let batches = df.clone().collect().await?;
+	if batches.is_empty() {
+		return Ok(df.clone());
+	}
+	
+	let mut unique_columns = Vec::new();
+	let mut processed_columns = HashSet::new();
+	
+	for (i, field_name) in field_names.iter().enumerate() {
+		if processed_columns.contains(field_name) {
+			continue;
+		}
+		
+		let mut duplicate_group = vec![field_name.clone()];
+		
+		// Find columns with identical content
+		for (j, other_field_name) in field_names.iter().enumerate() {
+			if i != j && !processed_columns.contains(other_field_name) {
+				if columns_have_identical_content(&batches, field_name, other_field_name)? {
+					duplicate_group.push(other_field_name.clone());
+				}
+			}
+		}
+		
+		// Choose which column to keep from the duplicate group
+		let column_to_keep = if keep == "first" {
+			duplicate_group.first().unwrap().clone()
+		} else if keep == "last" {
+			duplicate_group.last().unwrap().clone()
+		} else {
+			return Err(NailError::InvalidArgument(
+				"Keep must be either 'first' or 'last'".to_string()
+			));
+		};
+		
+		unique_columns.push(col(&column_to_keep));
+		
+		// Mark all columns in this group as processed
+		for col_name in duplicate_group {
+			processed_columns.insert(col_name);
+		}
 	}
 	
 	let result = df.clone().select(unique_columns)?;
 	Ok(result)
+}
+
+fn columns_have_identical_content(
+	batches: &[datafusion::arrow::record_batch::RecordBatch],
+	col1: &str,
+	col2: &str,
+) -> NailResult<bool> {
+	use datafusion::arrow::array::Array;
+	
+	for batch in batches {
+		let array1 = batch.column_by_name(col1)
+			.ok_or_else(|| NailError::InvalidArgument(format!("Column '{}' not found", col1)))?;
+		let array2 = batch.column_by_name(col2)
+			.ok_or_else(|| NailError::InvalidArgument(format!("Column '{}' not found", col2)))?;
+		
+		// Check if arrays have the same length
+		if array1.len() != array2.len() {
+			return Ok(false);
+		}
+		
+		// Check if arrays have the same data type
+		if array1.data_type() != array2.data_type() {
+			return Ok(false);
+		}
+		
+		// Compare all values
+		for i in 0..array1.len() {
+			let val1_is_null = array1.is_null(i);
+			let val2_is_null = array2.is_null(i);
+			
+			if val1_is_null != val2_is_null {
+				return Ok(false);
+			}
+			
+			if !val1_is_null {
+				// Both are non-null, compare values
+				match array1.data_type() {
+					datafusion::arrow::datatypes::DataType::Int64 => {
+						let arr1 = array1.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
+						let arr2 = array2.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
+						if arr1.value(i) != arr2.value(i) {
+							return Ok(false);
+						}
+					},
+					datafusion::arrow::datatypes::DataType::Float64 => {
+						let arr1 = array1.as_any().downcast_ref::<datafusion::arrow::array::Float64Array>().unwrap();
+						let arr2 = array2.as_any().downcast_ref::<datafusion::arrow::array::Float64Array>().unwrap();
+						if (arr1.value(i) - arr2.value(i)).abs() > f64::EPSILON {
+							return Ok(false);
+						}
+					},
+					datafusion::arrow::datatypes::DataType::Utf8 => {
+						let arr1 = array1.as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+						let arr2 = array2.as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+						if arr1.value(i) != arr2.value(i) {
+							return Ok(false);
+						}
+					},
+					_ => {
+						// For other types, use string comparison
+						let val1 = format!("{:?}", array1.slice(i, 1));
+						let val2 = format!("{:?}", array2.slice(i, 1));
+						if val1 != val2 {
+							return Ok(false);
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	Ok(true)
 }
 
 #[cfg(test)]

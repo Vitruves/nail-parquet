@@ -156,6 +156,35 @@ nail schema data.parquet -o schema.json
 nail schema data.parquet --verbose
 ```
 
+#### `nail metadata`
+
+Display detailed Parquet file metadata, including schema, row groups, column chunks, compression, encoding, and statistics.
+
+```bash
+# Display basic metadata
+nail metadata data.parquet
+
+# Show all available metadata
+nail metadata data.parquet --all
+
+# Show detailed schema and row group information
+nail metadata data.parquet --schema --row-groups --detailed
+
+# Save all metadata to JSON
+nail metadata data.parquet --all -o metadata.json
+```
+
+**Options:**
+
+- `--schema` - Show detailed schema information
+- `--row-groups` - Show row group information
+- `--column-chunks` - Show column chunk information
+- `--compression` - Show compression information
+- `--encoding` - Show encoding information
+- `--statistics` - Show statistics information
+- `--all` - Show all available metadata
+- `--detailed` - Show metadata in detailed format
+
 #### `nail size`
 
 Analyze file and memory usage with detailed size breakdowns.
@@ -218,6 +247,36 @@ nail search data.parquet --value "error" -o search_results.json
 - `--ignore-case` - Case-insensitive search
 - `--exact` - Exact match only (no partial matches)
 
+### Data Quality Tools
+
+#### `nail outliers`
+
+Detect and optionally remove outliers from numeric columns using various methods.
+
+```bash
+# Detect outliers using IQR method for specific column
+nail outliers data.parquet -c "price" --method iqr
+
+# Detect outliers using Z-score with a custom threshold, showing values
+nail outliers data.parquet -c "revenue" --method z-score --z-score-threshold 2.5 --show-values
+
+# Remove outliers using Modified Z-score method from multiple columns
+nail outliers data.parquet -c "age,income" --method modified-z-score --remove -o cleaned_data.parquet
+
+# Detect outliers using Isolation Forest method (simplified)
+nail outliers data.parquet -c "score" --method isolation-forest
+```
+
+**Options:**
+
+- `-c, --columns PATTERN` - Comma-separated column names or regex patterns for outlier detection
+- `--method METHOD` - Outlier detection method: `iqr`, `z-score`, `modified-z-score`, `isolation-forest` (default: iqr)
+- `--iqr-multiplier VALUE` - IQR multiplier for outlier detection (default: 1.5)
+- `--z-score-threshold VALUE` - Z-score threshold for outlier detection (default: 3.0)
+- `--show-values` - Show outlier values instead of just flagging them
+- `--include-row-numbers` - Include row numbers in output
+- `--remove` - Remove outliers from dataset and save cleaned data
+
 ### Statistics & Analysis
 
 #### `nail stats`
@@ -261,32 +320,33 @@ Compute correlation matrices between numeric columns with optional statistical s
 nail correlations data.parquet
 
 # Specific correlation types
-nail correlations data.parquet --correlation-type kendall
-nail correlations data.parquet --correlation-type spearman
+nail correlations data.parquet --type kendall
+nail correlations data.parquet --type spearman
 
 # Correlations for specific columns
 nail correlations data.parquet -c "price,volume,quantity"
 
 # Output as correlation matrix format
-nail correlations data.parquet --correlation-matrix
+nail correlations data.parquet --matrix
 
 # Include statistical significance tests (p-values for fisher, t-test, chi-sqr)
-nail correlations data.parquet --stats-tests fisher_exact,t_test
+nail correlations data.parquet --tests fisher_exact,t_test
 
 # Comprehensive correlation analysis with significance tests
-nail correlations data.parquet --stats-tests fisher_exact -o correlations.json
+nail correlations data.parquet --tests fisher_exact -o correlations.json
 ```
 
 **Options:**
 
 - `-c, --columns PATTERN` - Comma-separated column names or regex patterns
-- `--correlation-type TYPE` - Correlation type: `pearson`, `kendall`, `spearman` (default: pearson)
-- `--correlation-matrix` - Output as correlation matrix format
-- `--stats-tests` - Include statistical significance tests (`fisher_exact`, `chi_sqr`, `t_test`)
+- `-t, --type TYPE` - Correlation type: `pearson`, `kendall`, `spearman` (default: pearson)
+- `--matrix` - Output as correlation matrix format
+- `--tests` - Include statistical significance tests (`fisher_exact`, `chi_sqr`, `t_test`)
+- `--digits N` - Number of decimal places for correlation values (default: 4)
 
 #### `nail frequency`
 
-Compute frequency tables for categorical columns showing value counts and distributions.
+Compute frequency tables for categorical columns showing value counts, distributions, and percentages.
 
 ```bash
 # Basic frequency table for a single column
@@ -305,6 +365,8 @@ nail frequency data.parquet -c "category,status" --verbose
 **Options:**
 
 - `-c, --columns PATTERN` - Comma-separated column names to analyze (required).
+
+**Output:** Shows frequency counts with percentages for each value, helping identify data distribution patterns.
 
 ### Data Manipulation
 
@@ -365,8 +427,11 @@ Filter data based on column conditions or row characteristics.
 # Filter by column conditions
 nail filter data.parquet -c "price>100,volume<1000"
 
-# Multiple conditions
-nail filter data.parquet -c "age>=18,status='active',score>80"
+# Multiple conditions with different operators
+nail filter data.parquet -c "age>=18,status=active,score!=0"
+
+# String matching and numeric comparisons
+nail filter data.parquet -c "name!=test,salary<=50000,active=true"
 
 # Filter to numeric columns only
 nail filter data.parquet --rows numeric-only
@@ -383,7 +448,11 @@ nail filter data.parquet --rows char-only
 
 **Options:**
 
-- `-c, --columns CONDITIONS` - Column filter conditions (e.g., 'age>25,salary<50000')
+- `-c, --columns CONDITIONS` - Column filter conditions (comma-separated). Supported operators:
+  - `=` (equals), `!=` (not equals)
+  - `>` (greater than), `>=` (greater or equal)
+  - `<` (less than), `<=` (less or equal)
+  - Examples: `age>25`, `status=active`, `price<=100`
 - `--rows FILTER` - Row filter type: `no-nan`, `numeric-only`, `char-only`, `no-zeros`
 
 #### `nail fill`
@@ -427,7 +496,7 @@ nail rename data.parquet --column "id=user_id,val=value" -o renamed.parquet
 
 #### `nail create`
 
-Create new columns based on expressions or computations from existing columns.
+Create new columns with expressions based on existing columns.
 
 ```bash
 # Create a single new column

@@ -136,13 +136,11 @@ async fn fill_missing_values(
 					])
 				},
 				FillMethod::Forward => {
-					// Forward fill - use LAG window function to get previous non-null value
-					// This is a simplified implementation
+					// Forward fill - handled after the select_exprs construction
 					Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 				},
 				FillMethod::Backward => {
-					// Backward fill - use LEAD window function to get next non-null value
-					// This is a simplified implementation
+					// Backward fill - handled after the select_exprs construction
 					Expr::Column(datafusion::common::Column::new(None::<String>, field_name))
 				},
 			};
@@ -316,12 +314,255 @@ async fn fill_missing_values(
 			}
 		}
 	} else if matches!(method, FillMethod::Forward | FillMethod::Backward) {
-		// For forward/backward fill, we need to process the data row by row
-		// This is a simplified implementation that just returns the original data
-		// A full implementation would require complex window functions
-		return Ok(df.clone());
+		// For forward/backward fill, we need to use window functions
+		return fill_forward_backward(df, columns, method).await;
 	}
 	
 	let result = ctx.table(table_name).await?.select(select_exprs)?;
 	Ok(result)
+}
+
+async fn fill_forward_backward(df: &DataFrame, columns: &[String], method: &FillMethod) -> NailResult<DataFrame> {
+	// Collect the data to process it row by row
+	let batches = df.clone().collect().await?;
+	
+	if batches.is_empty() {
+		return Ok(df.clone());
+	}
+	
+	// Process batches for forward/backward fill
+	let mut processed_batches = Vec::new();
+	
+	for batch in batches {
+		let mut arrays = Vec::new();
+		let schema = batch.schema();
+		
+		for field in schema.fields() {
+			let field_name = field.name();
+			let array = batch.column_by_name(field_name).unwrap();
+			
+			if columns.contains(field_name) {
+				match method {
+					FillMethod::Forward => {
+						arrays.push(forward_fill_array(array.clone())?);
+					},
+					FillMethod::Backward => {
+						arrays.push(backward_fill_array(array.clone())?);
+					},
+					_ => arrays.push(array.clone()),
+				}
+			} else {
+				arrays.push(array.clone());
+			}
+		}
+		
+		let processed_batch = datafusion::arrow::record_batch::RecordBatch::try_new(
+			schema.clone(),
+			arrays
+		)?;
+		processed_batches.push(processed_batch);
+	}
+	
+	// Convert back to DataFrame
+	let ctx = datafusion::execution::context::SessionContext::new();
+	let table_name = "processed_data";
+	let provider = datafusion::datasource::memory::MemTable::try_new(
+		processed_batches[0].schema(),
+		vec![processed_batches]
+	)?;
+	ctx.register_table(table_name, std::sync::Arc::new(provider))?;
+	
+	Ok(ctx.table(table_name).await?)
+}
+
+fn forward_fill_array(array: datafusion::arrow::array::ArrayRef) -> NailResult<datafusion::arrow::array::ArrayRef> {
+	use datafusion::arrow::array::{Array, StringArray, Float64Array, Int64Array};
+	use datafusion::arrow::datatypes::DataType;
+	
+	match array.data_type() {
+		DataType::Utf8 => {
+			let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+			let mut builder = datafusion::arrow::array::StringBuilder::new();
+			let mut last_value: Option<String> = None;
+			
+			for i in 0..string_array.len() {
+				if string_array.is_null(i) {
+					if let Some(ref value) = last_value {
+						builder.append_value(value);
+					} else {
+						builder.append_null();
+					}
+				} else {
+					let value = string_array.value(i).to_string();
+					last_value = Some(value.clone());
+					builder.append_value(&value);
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		DataType::Float64 => {
+			let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
+			let mut builder = datafusion::arrow::array::Float64Builder::new();
+			let mut last_value: Option<f64> = None;
+			
+			for i in 0..float_array.len() {
+				if float_array.is_null(i) {
+					if let Some(value) = last_value {
+						builder.append_value(value);
+					} else {
+						builder.append_null();
+					}
+				} else {
+					let value = float_array.value(i);
+					last_value = Some(value);
+					builder.append_value(value);
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		DataType::Int64 => {
+			let int_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+			let mut builder = datafusion::arrow::array::Int64Builder::new();
+			let mut last_value: Option<i64> = None;
+			
+			for i in 0..int_array.len() {
+				if int_array.is_null(i) {
+					if let Some(value) = last_value {
+						builder.append_value(value);
+					} else {
+						builder.append_null();
+					}
+				} else {
+					let value = int_array.value(i);
+					last_value = Some(value);
+					builder.append_value(value);
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		_ => {
+			// For other types, just return the original array
+			Ok(array.clone())
+		}
+	}
+}
+
+fn backward_fill_array(array: datafusion::arrow::array::ArrayRef) -> NailResult<datafusion::arrow::array::ArrayRef> {
+	use datafusion::arrow::array::{Array, StringArray, Float64Array, Int64Array};
+	use datafusion::arrow::datatypes::DataType;
+	
+	match array.data_type() {
+		DataType::Utf8 => {
+			let string_array = array.as_any().downcast_ref::<StringArray>().unwrap();
+			let mut builder = datafusion::arrow::array::StringBuilder::new();
+			let mut values = Vec::new();
+			
+			// First pass: collect all values
+			for i in 0..string_array.len() {
+				if string_array.is_null(i) {
+					values.push(None);
+				} else {
+					values.push(Some(string_array.value(i).to_string()));
+				}
+			}
+			
+			// Second pass: backward fill
+			let mut next_value: Option<String> = None;
+			for i in (0..values.len()).rev() {
+				if values[i].is_some() {
+					next_value = values[i].clone();
+				} else if let Some(ref value) = next_value {
+					values[i] = Some(value.clone());
+				}
+			}
+			
+			// Third pass: build result
+			for value in values {
+				if let Some(v) = value {
+					builder.append_value(&v);
+				} else {
+					builder.append_null();
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		DataType::Float64 => {
+			let float_array = array.as_any().downcast_ref::<Float64Array>().unwrap();
+			let mut builder = datafusion::arrow::array::Float64Builder::new();
+			let mut values = Vec::new();
+			
+			// First pass: collect all values
+			for i in 0..float_array.len() {
+				if float_array.is_null(i) {
+					values.push(None);
+				} else {
+					values.push(Some(float_array.value(i)));
+				}
+			}
+			
+			// Second pass: backward fill
+			let mut next_value: Option<f64> = None;
+			for i in (0..values.len()).rev() {
+				if values[i].is_some() {
+					next_value = values[i];
+				} else if let Some(value) = next_value {
+					values[i] = Some(value);
+				}
+			}
+			
+			// Third pass: build result
+			for value in values {
+				if let Some(v) = value {
+					builder.append_value(v);
+				} else {
+					builder.append_null();
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		DataType::Int64 => {
+			let int_array = array.as_any().downcast_ref::<Int64Array>().unwrap();
+			let mut builder = datafusion::arrow::array::Int64Builder::new();
+			let mut values = Vec::new();
+			
+			// First pass: collect all values
+			for i in 0..int_array.len() {
+				if int_array.is_null(i) {
+					values.push(None);
+				} else {
+					values.push(Some(int_array.value(i)));
+				}
+			}
+			
+			// Second pass: backward fill
+			let mut next_value: Option<i64> = None;
+			for i in (0..values.len()).rev() {
+				if values[i].is_some() {
+					next_value = values[i];
+				} else if let Some(value) = next_value {
+					values[i] = Some(value);
+				}
+			}
+			
+			// Third pass: build result
+			for value in values {
+				if let Some(v) = value {
+					builder.append_value(v);
+				} else {
+					builder.append_null();
+				}
+			}
+			
+			Ok(std::sync::Arc::new(builder.finish()))
+		},
+		_ => {
+			// For other types, just return the original array
+			Ok(array.clone())
+		}
+	}
 }

@@ -125,117 +125,123 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
         args.common.log_if_verbose(&format!("Number of bins: {}", n_bins.unwrap_or(10)));
     }
 
-    // For simplicity, let's use a basic binning approach with DataFrame operations
-    // This is a simplified version that bins the first column only
+    // Process each column for binning
+    let mut result_df = df.clone();
     
-    if columns.len() > 1 {
-        return Err(NailError::InvalidArgument(
-            "Multiple column binning not yet implemented. Please specify one column at a time.".to_string()
-        ));
-    }
-    
-    let column_name = columns[0];
-    
-    // Calculate statistics
-    let agg_df = df.clone()
-        .aggregate(
-            vec![],
-            vec![
-                min(col(column_name)).alias("min_val"),
-                max(col(column_name)).alias("max_val"),
-                count(col(column_name)).alias("count"),
-            ]
-        )?;
-    
-    let stats_batch = agg_df.collect().await?;
-    if stats_batch.is_empty() || stats_batch[0].num_rows() == 0 {
-        return Err(NailError::InvalidArgument(
-            format!("No data found in column '{}'", column_name)
-        ));
-    }
-
-    let min_val = extract_float_value(&stats_batch[0], 0, 0)?;
-    let max_val = extract_float_value(&stats_batch[0], 1, 0)?;
-    
-    args.common.log_if_verbose(&format!("Column '{}' range: {} to {}", column_name, min_val, max_val));
-    
-    // Calculate bin edges based on method
-    let edges = match &args.method {
-        BinningMethod::EqualWidth => {
-            if let Some(edges) = &bin_edges {
-                edges.clone()
-            } else {
-                let n = n_bins.unwrap_or(10);
-                calculate_equal_width_edges(min_val, max_val, n, args.include_lowest)
-            }
-        },
-        BinningMethod::Custom => {
-            if let Some(edges) = &bin_edges {
-                edges.clone()
-            } else {
-                return Err(NailError::InvalidArgument(
-                    "Custom binning method requires bin edges to be specified".to_string()
-                ));
-            }
-        },
-        BinningMethod::EqualFrequency => {
+    for column_name in &columns {
+        args.common.log_if_verbose(&format!("Processing column: {}", column_name));
+        
+        // Calculate statistics
+        let agg_df = result_df.clone()
+            .aggregate(
+                vec![],
+                vec![
+                    min(col(*column_name)).alias("min_val"),
+                    max(col(*column_name)).alias("max_val"),
+                    count(col(*column_name)).alias("count"),
+                ]
+            )?;
+        
+        let stats_batch = agg_df.collect().await?;
+        if stats_batch.is_empty() || stats_batch[0].num_rows() == 0 {
             return Err(NailError::InvalidArgument(
-                "Equal frequency binning not yet implemented".to_string()
+                format!("No data found in column '{}'", column_name)
             ));
         }
-    };
 
-    args.common.log_if_verbose(&format!("Using bin edges: {:?}", edges));
+        let min_val = extract_float_value(&stats_batch[0], 0, 0)?;
+        let max_val = extract_float_value(&stats_batch[0], 1, 0)?;
+        
+        args.common.log_if_verbose(&format!("Column '{}' range: {} to {}", column_name, min_val, max_val));
+        
+        // Calculate bin edges based on method
+        let edges = match &args.method {
+            BinningMethod::EqualWidth => {
+                if let Some(edges) = &bin_edges {
+                    edges.clone()
+                } else {
+                    let n = n_bins.unwrap_or(10);
+                    calculate_equal_width_edges(min_val, max_val, n, args.include_lowest)
+                }
+            },
+            BinningMethod::Custom => {
+                if let Some(edges) = &bin_edges {
+                    edges.clone()
+                } else {
+                    return Err(NailError::InvalidArgument(
+                        "Custom binning method requires bin edges to be specified".to_string()
+                    ));
+                }
+            },
+            BinningMethod::EqualFrequency => {
+                if let Some(edges) = &bin_edges {
+                    edges.clone()
+                } else {
+                    let n = n_bins.unwrap_or(10);
+                    calculate_equal_frequency_edges(&result_df, column_name, n).await?
+                }
+            }
+        };
 
-    // Create binned column using a simple approach
-    let mut select_exprs = vec![];
-    
-    // Add original columns if not dropping them
-    if !args.drop_original {
-        for field in schema.fields() {
+        args.common.log_if_verbose(&format!("Using bin edges for {}: {:?}", column_name, edges));
+
+        // Create binned column using a simple approach
+        let mut select_exprs = vec![];
+        
+        // Add all current columns from result_df
+        let current_schema = result_df.schema();
+        for field in current_schema.fields() {
             select_exprs.push(col(field.name()));
         }
-    } else {
-        // When dropping original, keep all columns except the one being binned
+        
+        // Add binned column with a simplified binning expression
+        let binned_col_name = format!("{}{}", column_name, args.suffix);
+        
+        // Create a simple case expression for binning
+        let mut case_expr: Option<CaseBuilder> = None;
+        for i in 0..edges.len() - 1 {
+            let lower = edges[i];
+            let upper = edges[i + 1];
+            
+            let label = if let Some(label_vec) = &labels {
+                label_vec[i].clone()
+            } else {
+                format!("[{:.2}, {:.2})", lower, upper)
+            };
+            
+            let condition = if i == edges.len() - 2 {
+                // Last bin includes upper bound
+                col(*column_name).gt_eq(lit(lower)).and(col(*column_name).lt_eq(lit(upper)))
+            } else {
+                col(*column_name).gt_eq(lit(lower)).and(col(*column_name).lt(lit(upper)))
+            };
+            
+            case_expr = Some(match case_expr {
+                None => when(condition, lit(label)),
+                Some(mut prev) => prev.when(condition, lit(label)),
+            });
+        }
+        
+        let final_case = case_expr.unwrap().otherwise(lit("NULL"))?;
+        select_exprs.push(final_case.alias(binned_col_name));
+        
+        // Update result_df with the new binned column
+        result_df = result_df.select(select_exprs)?;
+    }
+    
+    // Handle dropping original columns if requested
+    if args.drop_original {
+        let mut final_select_exprs = vec![];
+        let schema = result_df.schema();
+        
         for field in schema.fields() {
-            if field.name() != column_name {
-                select_exprs.push(col(field.name()));
+            if !columns.contains(&field.name().as_str()) {
+                final_select_exprs.push(col(field.name()));
             }
         }
+        
+        result_df = result_df.select(final_select_exprs)?;
     }
-    
-    // Add binned column with a simplified binning expression
-    let binned_col_name = format!("{}{}", column_name, args.suffix);
-    
-    // Create a simple case expression for binning
-    let mut case_expr: Option<CaseBuilder> = None;
-    for i in 0..edges.len() - 1 {
-        let lower = edges[i];
-        let upper = edges[i + 1];
-        
-        let label = if let Some(label_vec) = &labels {
-            label_vec[i].clone()
-        } else {
-            format!("[{:.2}, {:.2})", lower, upper)
-        };
-        
-        let condition = if i == edges.len() - 2 {
-            // Last bin includes upper bound
-            col(column_name).gt_eq(lit(lower)).and(col(column_name).lt_eq(lit(upper)))
-        } else {
-            col(column_name).gt_eq(lit(lower)).and(col(column_name).lt(lit(upper)))
-        };
-        
-        case_expr = Some(match case_expr {
-            None => when(condition, lit(label)),
-            Some(mut prev) => prev.when(condition, lit(label)),
-        });
-    }
-    
-    let final_case = case_expr.unwrap().otherwise(lit("NULL"))?;
-    select_exprs.push(final_case.alias(binned_col_name));
-    
-    let result_df = df.select(select_exprs)?;
 
     // Display or write the results
     let output_handler = OutputHandler::new(&args.common);
@@ -292,6 +298,63 @@ fn calculate_equal_width_edges(min_val: f64, max_val: f64, n_bins: usize, includ
     }
     
     edges
+}
+
+async fn calculate_equal_frequency_edges(df: &DataFrame, column_name: &str, n_bins: usize) -> NailResult<Vec<f64>> {
+    // Get sorted values to calculate quantiles
+    let sorted_df = df.clone()
+        .sort(vec![col(column_name).sort(true, true)])?;
+    
+    let batches = sorted_df.collect().await?;
+    
+    let mut all_values = Vec::new();
+    for batch in batches {
+        let array = batch.column_by_name(column_name)
+            .ok_or_else(|| NailError::InvalidArgument(format!("Column '{}' not found", column_name)))?;
+        
+        if let Some(float_array) = array.as_any().downcast_ref::<Float64Array>() {
+            for i in 0..float_array.len() {
+                if !float_array.is_null(i) {
+                    all_values.push(float_array.value(i));
+                }
+            }
+        } else {
+            return Err(NailError::InvalidArgument(
+                format!("Column '{}' must be numeric for equal-frequency binning", column_name)
+            ));
+        }
+    }
+    
+    if all_values.is_empty() {
+        return Err(NailError::InvalidArgument(
+            format!("No valid values found in column '{}'", column_name)
+        ));
+    }
+    
+    // Calculate quantile positions
+    let mut edges = Vec::with_capacity(n_bins + 1);
+    edges.push(all_values[0]); // First value (min)
+    
+    for i in 1..n_bins {
+        let quantile_pos = (i as f64 / n_bins as f64) * (all_values.len() - 1) as f64;
+        let index = quantile_pos.floor() as usize;
+        let fraction = quantile_pos - quantile_pos.floor();
+        
+        let value = if index + 1 < all_values.len() {
+            all_values[index] + fraction * (all_values[index + 1] - all_values[index])
+        } else {
+            all_values[index]
+        };
+        
+        edges.push(value);
+    }
+    
+    edges.push(all_values[all_values.len() - 1]); // Last value (max)
+    
+    // Remove duplicates and ensure edges are increasing
+    edges.dedup_by(|a, b| (*a - *b).abs() < f64::EPSILON);
+    
+    Ok(edges)
 }
 
 fn extract_float_value(batch: &datafusion::arrow::record_batch::RecordBatch, col_idx: usize, row_idx: usize) -> NailResult<f64> {

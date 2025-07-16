@@ -30,9 +30,9 @@ const CRATE_NAME: &str = "nail-parquet";
 // Write your release notes using concat! for multiple lines:
 
 const RELEASE_NOTE: &str = concat!(
-	"Release note version 1.6.3:\n",
-    "Added outliers and metadata commands\n",
-    "Fixed diverse bugs involving column flags on Linux\n", 
+	"Release note version 1.6.4:\n",
+    "Added missing functions for binning\n",
+    "Fixed diverse bugs related to UInt64\n", 
     "Enhanced error handling and user experience"
 );
 

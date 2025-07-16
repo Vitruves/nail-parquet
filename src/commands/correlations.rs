@@ -22,13 +22,13 @@ pub struct CorrelationsArgs {
 	#[arg(short, long, help = "Comma-separated column names or regex patterns")]
 	pub columns: Option<String>,
 	
-	#[arg(short = 't', long, help = "Correlation type", value_enum, default_value = "pearson")]
+	#[arg(short = 't', long = "type", help = "Correlation type", value_enum, default_value = "pearson")]
 	pub correlation_type: CorrelationType,
 	
-	#[arg(long, help = "Output correlation matrix format")]
+	#[arg(long = "matrix", help = "Output correlation matrix format")]
 	pub correlation_matrix: bool,
 	
-	#[arg(long, help = "Statistical tests to include (comma-separated)", value_enum, num_args = 1.., value_delimiter = ',')]
+	#[arg(long = "tests", help = "Statistical tests to include (comma-separated)", value_enum, num_args = 1.., value_delimiter = ',')]
 	pub stats_tests: Option<Vec<CorrTest>>,
 	
 	#[arg(long, help = "Number of decimal places for correlation values", default_value = "4")]

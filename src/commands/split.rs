@@ -214,7 +214,7 @@ async fn stratified_split(
 			if verbose {
 				eprintln!("Warning: Split {} is empty -> {}", i + 1, output_name.display());
 			}
-			let empty_df = df.clone().limit(0, Some(0))?;
+			let empty_df = df.clone().limit(0, Some(1))?.filter(lit(false))?;
 			write_data(&empty_df, output_name, file_format.as_ref()).await?;
 		}
 	}

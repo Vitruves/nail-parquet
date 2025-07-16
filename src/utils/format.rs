@@ -327,6 +327,15 @@ fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_t
 					extract_numeric_from_debug(&debug_str)
 				}
 			},
+			DataType::UInt64 => {
+				if let Some(array) = column.as_any().downcast_ref::<UInt64Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					// Fallback for when the actual type doesn't match the schema type
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
 			DataType::Float32 => {
 				if let Some(array) = column.as_any().downcast_ref::<Float32Array>() {
 					format!("{:.2}", array.value(row_idx))
@@ -417,6 +426,13 @@ fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -
 			},
 			DataType::Int32 => {
 				if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					"0".to_string()
+				}
+			},
+			DataType::UInt64 => {
+				if let Some(array) = column.as_any().downcast_ref::<UInt64Array>() {
 					array.value(row_idx).to_string()
 				} else {
 					"0".to_string()

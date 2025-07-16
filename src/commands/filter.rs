@@ -11,7 +11,18 @@ pub struct FilterArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
 	
-	#[arg(short, long, help = "Column filter conditions (e.g., 'age>25,salary<50000')")]
+	#[arg(short, long, help = "Column filter conditions (comma-separated).\n\
+		Supported operators:\n\
+		• = (equals): 'status=active'\n\
+		• != (not equals): 'status!=inactive'\n\
+		• > (greater than): 'age>25'\n\
+		• >= (greater or equal): 'score>=80'\n\
+		• < (less than): 'salary<50000'\n\
+		• <= (less or equal): 'price<=100'\n\
+		Examples:\n\
+		• Single: 'age>25'\n\
+		• Multiple: 'age>=18,salary<50000,status=active'\n\
+		• Mixed types: 'score>80,name!=test,active=true'")]
 	pub columns: Option<String>,
 	
 	#[arg(short, long, help = "Row filter type", value_enum)]

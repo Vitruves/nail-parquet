@@ -65,19 +65,39 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
             col("frequency").sort(false, true),
         ])?;
 
+    // Calculate sum of all frequencies for percentage calculation
+    let sum_freq_df = frequency_df
+        .clone()
+        .aggregate(vec![], vec![datafusion::functions_aggregate::expr_fn::sum(col("frequency")).alias("total_frequency")])?;
+    
+    let sum_batches = sum_freq_df.collect().await?;
+    let total_frequency: i64 = if !sum_batches.is_empty() && sum_batches[0].num_rows() > 0 {
+        if let Some(array) = sum_batches[0].column_by_name("total_frequency") {
+            if let Some(int_array) = array.as_any().downcast_ref::<Int64Array>() {
+                int_array.value(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
     // Display results
     if args.common.output.is_some() || args.common.format.is_some() {
         let output_handler = OutputHandler::new(&args.common);
         output_handler.handle_output(&frequency_df, "frequency").await?;
     } else {
-        // Display to console with condensed format
-        display_frequency_table(&frequency_df, &resolved_column_names).await?;
+        // Display to console with condensed format including percentages
+        display_frequency_table(&frequency_df, &resolved_column_names, total_frequency).await?;
     }
 
     Ok(())
 }
 
-async fn display_frequency_table(df: &DataFrame, column_names: &[String]) -> NailResult<()> {
+async fn display_frequency_table(df: &DataFrame, column_names: &[String], total_frequency: i64) -> NailResult<()> {
     let batches = df.clone().collect().await?;
     
     if batches.is_empty() {
@@ -127,11 +147,21 @@ async fn display_frequency_table(df: &DataFrame, column_names: &[String]) -> Nai
                     field_color, value, RESET));
             }
             
-            // Add frequency with special highlighting
+            // Add frequency with special highlighting and percentage
             let freq_column = batch.column_by_name("frequency").unwrap();
-            let frequency = format_array_value(freq_column, row_idx);
-            display_parts.push(format!("{}frequency{}: {}{}{}{}",
-                "\x1b[93m", RESET, BOLD, "\x1b[93m", frequency, RESET));
+            let frequency_str = format_array_value(freq_column, row_idx);
+            
+            // Calculate percentage
+            let frequency_value: i64 = frequency_str.parse().unwrap_or(0);
+            let percentage = if total_frequency > 0 {
+                (frequency_value as f64 / total_frequency as f64) * 100.0
+            } else {
+                0.0
+            };
+            
+            display_parts.push(format!("{}frequency{}: {}{}{} {}({:.1}%){}", 
+                "\x1b[93m", RESET, BOLD, "\x1b[93m", frequency_str, 
+                "\x1b[2;37m", percentage, RESET));
             
             // Join all parts with comma separation
             let content = display_parts.join(", ");

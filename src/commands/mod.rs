@@ -50,27 +50,21 @@ pub mod update;
 #[derive(Subcommand)]
 pub enum Commands {
 	#[command(about = "Concatenate multiple datasets")]
-	#[command(next_help_heading = "Data Combination")]
 	Append(append::AppendArgs),
 	
 	#[command(about = "Bin continuous variables into categories")]
-	#[command(next_help_heading = "Data Transformation")]
 	Binning(binning::BinningArgs),
 	
 	#[command(about = "Convert between file formats")]
-	#[command(next_help_heading = "Format Conversion")]
 	Convert(convert::ConvertArgs),
 	
 	#[command(about = "Calculate correlation matrices")]
-	#[command(next_help_heading = "Data Analysis")]
 	Correlations(correlations::CorrelationsArgs),
 	
 	#[command(about = "Count total rows")]
-	#[command(next_help_heading = "Data Inspection")]
 	Count(count::CountArgs),
 	
-	#[command(about = "Create a new dataset")]
-	#[command(next_help_heading = "Data Manipulation")]
+	#[command(about = "Create new columns with expressions")]
 	Create(create::CreateArgs),
 	
 	#[command(about = "Remove duplicate rows or columns")]
@@ -104,7 +98,6 @@ pub enum Commands {
 	Metadata(metadata::MetadataArgs),
 	
 	#[command(about = "Optimize Parquet files for better performance")]
-	#[command(next_help_heading = "File Optimization")]
 	Optimize(optimize::OptimizeArgs),
 	
 	#[command(about = "Detect outliers in data")]
@@ -147,6 +140,5 @@ pub enum Commands {
 	Tail(tail::TailArgs),
 	
 	#[command(about = "Check for newer versions")]
-	#[command(next_help_heading = "Utility")]
 	Update(update::UpdateArgs),
 }

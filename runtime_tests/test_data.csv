@@ -1,0 +1,51 @@
+id,name,age,price,quantity,category,region,status,score,temperature,timestamp,email,description,is_active,cost,revenue
+1,Alice Johnson,25,129.99,3,Electronics,North,active,85.5,22.3,2024-01-15T10:30:00,alice@example.com,High-quality laptop for professionals,true,89.99,389.97
+2,Bob Smith,34,45.50,2,Books,South,inactive,72.1,18.7,2024-01-16T14:22:00,bob@test.com,Collection of programming books,false,25.00,91.00
+3,Carol Williams,28,299.99,1,Electronics,East,active,91.2,25.1,2024-01-17T09:15:00,carol@gmail.com,Premium smartphone with excellent camera,true,199.99,299.99
+4,David Brown,45,15.99,5,Books,West,active,68.9,20.5,2024-01-18T16:45:00,david@company.org,Educational children's books,true,8.99,79.95
+5,Emma Davis,31,75.00,2,Clothing,North,inactive,79.3,19.8,2024-01-19T11:30:00,emma@example.com,Comfortable winter jackets,false,45.00,150.00
+6,Frank Wilson,22,199.99,1,Electronics,South,active,88.7,23.9,2024-01-20T13:20:00,frank@test.org,Gaming headset with surround sound,true,119.99,199.99
+7,Grace Miller,39,29.99,4,Books,East,active,76.5,21.2,2024-01-21T08:45:00,grace@example.org,Mystery novels collection,true,15.99,119.96
+8,Henry Taylor,27,89.99,3,Clothing,West,inactive,82.1,17.6,2024-01-22T15:10:00,henry@gmail.com,Casual t-shirts and jeans,false,49.99,269.97
+9,Ivy Anderson,33,449.99,1,Electronics,North,active,94.8,24.7,2024-01-23T12:00:00,ivy@company.com,Professional camera for photography,true,299.99,449.99
+10,Jack Thompson,29,12.99,8,Books,South,active,71.4,22.0,2024-01-24T10:15:00,jack@test.com,Comic books and graphic novels,true,7.99,103.92
+11,Karen White,41,159.99,2,Clothing,East,inactive,83.6,18.3,2024-01-25T14:30:00,karen@example.com,Designer dresses for special occasions,false,99.99,319.98
+12,Liam Garcia,26,399.99,1,Electronics,West,active,89.9,26.1,2024-01-26T09:45:00,liam@company.org,High-performance gaming laptop,true,279.99,399.99
+13,Maya Rodriguez,35,22.50,6,Books,North,active,77.8,20.9,2024-01-27T16:20:00,maya@test.org,Self-help and motivation books,true,12.99,135.00
+14,Noah Martinez,24,65.00,3,Clothing,South,inactive,80.2,19.4,2024-01-28T11:45:00,noah@gmail.com,Athletic wear and sportswear,false,39.99,195.00
+15,Olivia Lopez,37,229.99,1,Electronics,East,active,92.3,23.5,2024-01-29T13:15:00,olivia@example.org,Wireless earbuds with noise cancellation,true,149.99,229.99
+16,Peter Clark,30,18.99,7,Books,West,active,74.7,21.8,2024-01-30T08:30:00,peter@company.com,Science fiction novels,true,9.99,132.93
+17,Quinn Lewis,38,99.99,2,Clothing,North,inactive,81.5,17.2,2024-01-31T15:00:00,quinn@test.com,Formal business suits,false,69.99,199.98
+18,Rachel Hall,23,349.99,1,Electronics,South,active,90.1,25.8,2024-02-01T10:45:00,rachel@example.com,Tablet for digital art and design,true,239.99,349.99
+19,Sam Young,42,35.00,4,Books,East,active,78.9,22.6,2024-02-02T14:15:00,sam@company.org,Historical fiction collection,true,19.99,140.00
+20,Tina King,32,120.00,2,Clothing,West,inactive,84.7,18.9,2024-02-03T12:30:00,tina@gmail.com,Luxury handbags and accessories,false,79.99,240.00
+21,Ursula Scott,28,179.99,1,Electronics,North,active,87.4,24.3,2024-02-04T09:20:00,ursula@test.org,Smart home security system,true,119.99,179.99
+22,Victor Green,36,28.99,5,Books,South,active,75.6,20.7,2024-02-05T16:10:00,victor@example.org,Cooking and recipe books,true,16.99,144.95
+23,Wendy Adams,29,89.99,3,Clothing,East,inactive,82.8,19.1,2024-02-06T11:15:00,wendy@company.com,Seasonal fashion collection,false,54.99,269.97
+24,Xavier Baker,44,599.99,1,Electronics,West,active,95.2,26.4,2024-02-07T13:45:00,xavier@test.com,Professional video editing equipment,true,399.99,599.99
+25,Yara Nelson,27,16.50,9,Books,North,active,73.3,21.5,2024-02-08T08:50:00,yara@example.com,Poetry and literature collection,true,9.99,148.50
+26,Zoe Carter,40,249.99,1,Electronics,South,inactive,88.1,23.7,2024-02-09T15:25:00,zoe@gmail.com,Professional microphone for podcasting,false,169.99,249.99
+27,Adam Phillips,33,42.99,3,Clothing,East,active,79.9,22.4,2024-02-10T10:35:00,adam@company.org,Outdoor adventure gear,true,28.99,128.97
+28,Bella Mitchell,25,199.99,2,Books,West,active,86.5,18.6,2024-02-11T14:50:00,bella@test.org,Professional development books,true,129.99,399.98
+29,Carlos Roberts,31,129.99,1,Electronics,North,inactive,83.2,25.0,2024-02-12T12:10:00,carlos@example.org,Bluetooth speakers with premium sound,false,89.99,129.99
+30,Diana Turner,46,33.50,4,Books,South,active,77.1,20.1,2024-02-13T09:40:00,diana@company.com,Travel and adventure guides,true,18.99,134.00
+31,Ethan Parker,26,149.99,2,Clothing,East,active,85.8,24.8,2024-02-14T16:05:00,ethan@test.com,Premium workout clothing,true,99.99,299.98
+32,Fiona Evans,34,379.99,1,Electronics,West,inactive,91.7,23.1,2024-02-15T11:20:00,fiona@gmail.com,Smart watch with health monitoring,false,259.99,379.99
+33,George Stewart,29,21.99,6,Books,North,active,76.2,21.9,2024-02-16T13:55:00,george@example.com,Philosophy and ethics collection,true,13.99,131.94
+34,Hannah Morris,38,79.99,3,Clothing,South,inactive,80.6,19.7,2024-02-17T08:25:00,hannah@company.org,Casual weekend wear,false,49.99,239.97
+35,Ian Rogers,24,299.99,1,Electronics,East,active,89.4,26.2,2024-02-18T15:40:00,ian@test.org,High-resolution monitor for gaming,true,199.99,299.99
+36,Julia Reed,32,24.99,5,Books,West,active,78.5,22.8,2024-02-19T10:05:00,julia@example.org,Romance novels collection,true,14.99,124.95
+37,Kevin Cox,41,159.99,2,Clothing,North,inactive,84.3,18.4,2024-02-20T14:30:00,kevin@company.com,Professional work attire,false,109.99,319.98
+38,Luna Ward,27,499.99,1,Electronics,South,active,93.6,25.6,2024-02-21T12:15:00,luna@test.com,Premium laptop for creative work,true,349.99,499.99
+39,Mason Bailey,35,19.99,7,Books,East,active,74.9,21.1,2024-02-22T09:50:00,mason@example.com,Technical and programming guides,true,11.99,139.93
+40,Nora Rivera,30,109.99,2,Clothing,West,inactive,82.4,20.3,2024-02-23T16:25:00,nora@gmail.com,Elegant evening wear,false,74.99,219.98
+41,Oliver Cooper,43,189.99,1,Electronics,North,active,88.8,24.0,2024-02-24T11:40:00,oliver@company.org,Wireless charging station,true,129.99,189.99
+42,Penny Richardson,28,31.50,4,Books,South,active,77.6,22.2,2024-02-25T13:20:00,penny@test.org,Art and design inspiration books,true,19.99,126.00
+43,Quincy Howard,37,69.99,3,Clothing,East,inactive,81.9,18.8,2024-02-26T08:45:00,quincy@example.org,Comfortable home loungewear,false,44.99,209.97
+44,Ruby Ward,25,259.99,1,Electronics,West,active,90.5,25.9,2024-02-27T15:10:00,ruby@company.com,Professional photography lens,true,179.99,259.99
+45,Samuel Torres,39,14.99,8,Books,North,active,72.8,21.4,2024-02-28T10:30:00,samuel@test.com,Children's educational books,true,8.99,119.92
+46,Tiffany Peterson,33,139.99,2,Clothing,South,inactive,85.1,19.5,2024-03-01T14:55:00,tiffany@example.com,Luxury jewelry and accessories,false,94.99,279.98
+47,Ulrich Gray,26,319.99,1,Electronics,East,active,92.9,26.5,2024-03-02T12:05:00,ulrich@company.org,Gaming console with accessories,true,219.99,319.99
+48,Vera Ramirez,42,26.99,5,Books,West,active,78.2,20.6,2024-03-03T09:35:00,vera@test.org,Health and wellness guides,true,15.99,134.95
+49,Walter James,31,99.99,3,Clothing,North,inactive,83.7,23.2,2024-03-04T16:00:00,walter@example.org,Seasonal outdoor clothing,false,64.99,299.97
+50,Xenia Watson,29,449.99,1,Electronics,South,active,94.1,24.9,2024-03-05T11:25:00,xenia@gmail.com,Professional audio recording equipment,true,309.99,449.99

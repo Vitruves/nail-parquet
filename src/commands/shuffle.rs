@@ -4,6 +4,7 @@ use crate::error::NailResult;
 use crate::utils::io::read_data;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
+use arrow::array::Array;
 
 #[derive(Args, Clone)]
 pub struct ShuffleArgs {
@@ -29,16 +30,104 @@ pub async fn execute(args: ShuffleArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn shuffle_dataframe(df: &DataFrame, _seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
-	ctx.register_table("temp_table", df.clone().into_view())?;
-
-	// Simple shuffling using ORDER BY RANDOM() 
-	// For now, ignore the seed parameter since DataFusion's RANDOM() doesn't support seeding reliably
-	let sql = "SELECT * FROM temp_table ORDER BY RANDOM()";
+async fn shuffle_dataframe(df: &DataFrame, seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
+	use rand::prelude::*;
 	
-	let result = ctx.sql(sql).await?;
-	Ok(result)
+	if let Some(seed_val) = seed {
+		// For seeded shuffling, collect the data and shuffle it manually
+		let batches = df.clone().collect().await?;
+		let mut all_rows = Vec::new();
+		
+		// Collect all rows
+		for batch in batches {
+			for row_idx in 0..batch.num_rows() {
+				all_rows.push((batch.clone(), row_idx));
+			}
+		}
+		
+		// Shuffle with the seed
+		let mut rng = StdRng::seed_from_u64(seed_val);
+		all_rows.shuffle(&mut rng);
+		
+		// Create new batches from shuffled rows
+		if let Some((first_batch, _)) = all_rows.first() {
+			let schema = first_batch.schema();
+			let mut columns: Vec<std::sync::Arc<dyn Array>> = Vec::new();
+			
+			// Initialize column builders
+			for field in schema.fields() {
+				match field.data_type() {
+					datafusion::arrow::datatypes::DataType::Int64 => {
+						let mut builder = datafusion::arrow::array::Int64Builder::new();
+						for (batch, row_idx) in &all_rows {
+							let array = batch.column_by_name(field.name()).unwrap();
+							let int_array = array.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>().unwrap();
+							if int_array.is_null(*row_idx) {
+								builder.append_null();
+							} else {
+								builder.append_value(int_array.value(*row_idx));
+							}
+						}
+						columns.push(std::sync::Arc::new(builder.finish()));
+					},
+					datafusion::arrow::datatypes::DataType::Float64 => {
+						let mut builder = datafusion::arrow::array::Float64Builder::new();
+						for (batch, row_idx) in &all_rows {
+							let array = batch.column_by_name(field.name()).unwrap();
+							let float_array = array.as_any().downcast_ref::<datafusion::arrow::array::Float64Array>().unwrap();
+							if float_array.is_null(*row_idx) {
+								builder.append_null();
+							} else {
+								builder.append_value(float_array.value(*row_idx));
+							}
+						}
+						columns.push(std::sync::Arc::new(builder.finish()));
+					},
+					datafusion::arrow::datatypes::DataType::Utf8 => {
+						let mut builder = datafusion::arrow::array::StringBuilder::new();
+						for (batch, row_idx) in &all_rows {
+							let array = batch.column_by_name(field.name()).unwrap();
+							let string_array = array.as_any().downcast_ref::<datafusion::arrow::array::StringArray>().unwrap();
+							if string_array.is_null(*row_idx) {
+								builder.append_null();
+							} else {
+								builder.append_value(string_array.value(*row_idx));
+							}
+						}
+						columns.push(std::sync::Arc::new(builder.finish()));
+					},
+					_ => {
+						// For other types, just copy the values as-is
+						let mut values = Vec::new();
+						for (batch, row_idx) in &all_rows {
+							let array = batch.column_by_name(field.name()).unwrap();
+							values.push(array.slice(*row_idx, 1));
+						}
+						// Concatenate all the slices
+						let arrays: Vec<&dyn Array> = values.iter().map(|a| a.as_ref()).collect();
+						columns.push(std::sync::Arc::new(datafusion::arrow::compute::concat(&arrays).unwrap()));
+					}
+				}
+			}
+			
+			// Create new record batch
+			let new_batch = datafusion::arrow::record_batch::RecordBatch::try_new(schema, columns)?;
+			
+			// Convert back to DataFrame
+			let ctx = crate::utils::create_context_with_jobs(jobs).await?;
+			let df = ctx.read_batch(new_batch)?;
+			Ok(df)
+		} else {
+			// Empty dataframe
+			Ok(df.clone())
+		}
+	} else {
+		// For non-seeded shuffling, use DataFusion's RANDOM()
+		let ctx = crate::utils::create_context_with_jobs(jobs).await?;
+		ctx.register_table("temp_table", df.clone().into_view())?;
+		let result = ctx.sql("SELECT * FROM temp_table ORDER BY RANDOM()").await?;
+		Ok(result)
+	}
 }
 
 #[cfg(test)]

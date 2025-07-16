@@ -53,12 +53,57 @@ pub enum CompressionType {
 }
 
 impl CompressionType {
-    fn to_parquet_compression(&self, _level: i32) -> Compression {
+    fn to_parquet_compression(&self, level: i32) -> Compression {
         match self {
             CompressionType::Snappy => Compression::SNAPPY,
-            CompressionType::Gzip => Compression::GZIP(Default::default()),
-            CompressionType::Zstd => Compression::ZSTD(Default::default()),
-            CompressionType::Brotli => Compression::BROTLI(Default::default()),
+            CompressionType::Gzip => {
+                use datafusion::parquet::basic::GzipLevel;
+                let gzip_level = match level {
+                    1 => GzipLevel::try_new(1).unwrap_or_default(),
+                    2 => GzipLevel::try_new(2).unwrap_or_default(),
+                    3 => GzipLevel::try_new(3).unwrap_or_default(),
+                    4 => GzipLevel::try_new(4).unwrap_or_default(),
+                    5 => GzipLevel::try_new(5).unwrap_or_default(),
+                    6 => GzipLevel::try_new(6).unwrap_or_default(),
+                    7 => GzipLevel::try_new(7).unwrap_or_default(),
+                    8 => GzipLevel::try_new(8).unwrap_or_default(),
+                    9 => GzipLevel::try_new(9).unwrap_or_default(),
+                    _ => GzipLevel::try_new(6).unwrap_or_default(), // Default to 6
+                };
+                Compression::GZIP(gzip_level)
+            },
+            CompressionType::Zstd => {
+                use datafusion::parquet::basic::ZstdLevel;
+                let zstd_level = match level {
+                    1 => ZstdLevel::try_new(1).unwrap_or_default(),
+                    2 => ZstdLevel::try_new(2).unwrap_or_default(),
+                    3 => ZstdLevel::try_new(3).unwrap_or_default(),
+                    4 => ZstdLevel::try_new(4).unwrap_or_default(),
+                    5 => ZstdLevel::try_new(5).unwrap_or_default(),
+                    6 => ZstdLevel::try_new(6).unwrap_or_default(),
+                    7 => ZstdLevel::try_new(7).unwrap_or_default(),
+                    8 => ZstdLevel::try_new(8).unwrap_or_default(),
+                    9 => ZstdLevel::try_new(9).unwrap_or_default(),
+                    _ => ZstdLevel::try_new(6).unwrap_or_default(), // Default to 6
+                };
+                Compression::ZSTD(zstd_level)
+            },
+            CompressionType::Brotli => {
+                use datafusion::parquet::basic::BrotliLevel;
+                let brotli_level = match level {
+                    1 => BrotliLevel::try_new(1).unwrap_or_default(),
+                    2 => BrotliLevel::try_new(2).unwrap_or_default(),
+                    3 => BrotliLevel::try_new(3).unwrap_or_default(),
+                    4 => BrotliLevel::try_new(4).unwrap_or_default(),
+                    5 => BrotliLevel::try_new(5).unwrap_or_default(),
+                    6 => BrotliLevel::try_new(6).unwrap_or_default(),
+                    7 => BrotliLevel::try_new(7).unwrap_or_default(),
+                    8 => BrotliLevel::try_new(8).unwrap_or_default(),
+                    9 => BrotliLevel::try_new(9).unwrap_or_default(),
+                    _ => BrotliLevel::try_new(6).unwrap_or_default(), // Default to 6
+                };
+                Compression::BROTLI(brotli_level)
+            },
         }
     }
 }
