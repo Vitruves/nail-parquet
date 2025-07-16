@@ -33,7 +33,8 @@ const RELEASE_NOTE: &str = concat!(
 	"Release note version 1.6.4:\n",
     "Added missing functions for binning\n",
     "Fixed diverse bugs related to UInt64\n", 
-    "Enhanced error handling and user experience"
+    "Improved drop command by adding operator suppport for rows",
+	"Reduced dependencies complexity for faster build"
 );
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -87,7 +88,7 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 	
 	// Compare versions
 	if is_newer_version(latest_version, CURRENT_VERSION) {
-		println!("{}", "🎉 A newer version is available!".bright_green().bold());
+		println!("{}", "A newer version is available!".bright_green().bold());
 		println!("{} {}", "Current version:".cyan(), format!("{}", CURRENT_VERSION).yellow());
 		println!("{}", RELEASE_NOTE.dimmed());
 		println!("{} {}", "Latest version: ".cyan(), latest_version.bright_green().bold());
@@ -98,7 +99,7 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 		println!("{}", "Or if you installed via other means, check:".bright_blue());
 		println!("  {}", "https://github.com/Vitruves/nail-parquet/releases".bright_white().underline());
 	} else if latest_version == CURRENT_VERSION {
-		println!("{}", format!("✅ You are running the latest version {}!", CURRENT_VERSION).bright_green().bold());
+		println!("{}", format!("You are running the latest version {}!", CURRENT_VERSION).bright_green().bold());
 		println!("{}", RELEASE_NOTE.dimmed());
 	} else {
 		println!("{}", format!("🚀 You are running a development version {}!", CURRENT_VERSION).bright_yellow().bold());

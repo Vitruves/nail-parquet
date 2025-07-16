@@ -9,19 +9,19 @@ repository = "https://github.com/Vitruves/nail-parquet"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "color"] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs"] }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 datafusion = "42.2"
-arrow = "53.4"
-arrow-schema = "53.4"
-parquet = "53.4"
+arrow = "53.1"
+arrow-schema = "53.1"
+parquet = "53.1"
 rand = "0.8"
 statrs = "0.17"
 regex = "1"
-futures = "0.3"
+#futures = "0.3"
 num_cpus = "1.16"
 chrono = { version = "0.4", features = ["serde"] }
 term_size = "0.3"
@@ -46,5 +46,3 @@ path = "src/main.rs"
 tempfile = "3.10"
 assert_cmd = "2.0"
 predicates = "3.1"
-
-

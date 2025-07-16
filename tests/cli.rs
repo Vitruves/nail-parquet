@@ -405,7 +405,7 @@ mod format_and_analysis_tests {
 		assert!(corr_data["correlation"].as_f64().unwrap() > 0.9);
 		
 		let out_matrix = fixtures.get_output_path("corr_matrix.json");
-		nail().args(["correlations", fixtures.sample_parquet.to_str().unwrap(), "-c", "id,value", "--correlation-matrix", "--digits", "2", "-f", "json", "-o", out_matrix.to_str().unwrap()]).assert().success();
+		nail().args(["correlations", fixtures.sample_parquet.to_str().unwrap(), "-c", "id,value", "--matrix", "--digits", "2", "-f", "json", "-o", out_matrix.to_str().unwrap()]).assert().success();
 		let matrix_content = fs::read_to_string(out_matrix).unwrap();
 		let matrix_lines: Vec<&str> = matrix_content.trim().lines().collect();
 		assert_eq!(matrix_lines.len(), 2);
