@@ -33,7 +33,7 @@ const RELEASE_NOTE: &str = concat!(
 	"Release note version 1.6.4:\n",
     "Added missing functions for binning\n",
     "Fixed diverse bugs related to UInt64\n", 
-    "Improved drop command by adding operator suppport for rows",
+    "Improved drop command by adding operator suppport for rows\n",
 	"Reduced dependencies complexity for faster build"
 );
 

@@ -18,6 +18,24 @@ TEST_DATA="$BASE_DIR/test_data.csv"
 TEMP_DIR="$BASE_DIR/temp"
 RESULTS_DIR="$BASE_DIR/results"
 
+# Default nail path
+NAIL_PATH="nail"
+
+# Parse command line arguments
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        --bin)
+            NAIL_PATH="$2"
+            shift # past argument
+            ;;
+        *)
+            echo "Unknown parameter passed: $1"
+            exit 1
+            ;;
+    esac
+    shift # past argument or value
+done
+
 # Create necessary directories
 mkdir -p "$TEMP_DIR" "$RESULTS_DIR"
 
@@ -62,12 +80,12 @@ run_test() {
 
 # Function to check if nail is installed
 check_nail_installation() {
-    if ! command -v nail &> /dev/null; then
-        error "nail command not found. Please install nail globally first."
-        echo "Run: cargo install --path . (from the nail project directory)"
+    if ! command -v "$NAIL_PATH" &> /dev/null; then
+        error "nail command not found at '$NAIL_PATH'. Please install nail globally or provide the correct path with --bin."
+        echo "Run: cargo install --path . (from the nail project directory) or provide path with --bin"
         exit 1
     fi
-    success "nail command found: $(which nail)"
+    success "nail command found: $($NAIL_PATH --version | head -n 1)"
 }
 
 # Function to convert test data to parquet for parquet-specific tests
@@ -75,14 +93,14 @@ setup_test_files() {
     log "Setting up test files..."
     
     # Convert CSV to Parquet for parquet-specific tests
-    nail convert "$TEST_DATA" -o "$TEMP_DIR/test_data.parquet"
+    "$NAIL_PATH" convert "$TEST_DATA" -o "$TEMP_DIR/test_data.parquet"
     
     # Create additional test files
-    nail head "$TEST_DATA" -n 10 -o "$TEMP_DIR/small_sample.csv"
-    nail convert "$TEMP_DIR/small_sample.csv" -o "$TEMP_DIR/small_sample.parquet"
+    "$NAIL_PATH" head "$TEST_DATA" -n 10 -o "$TEMP_DIR/small_sample.csv"
+    "$NAIL_PATH" convert "$TEMP_DIR/small_sample.csv" -o "$TEMP_DIR/small_sample.parquet"
     
     # Create JSON version
-    nail convert "$TEST_DATA" -o "$TEMP_DIR/test_data.json"
+    "$NAIL_PATH" convert "$TEST_DATA" -o "$TEMP_DIR/test_data.json"
     
     success "Test files created"
 }
@@ -106,48 +124,48 @@ log "Starting comprehensive test suite..."
 echo -e "\n${BLUE}=== DATA INSPECTION COMMANDS ===${NC}"
 
 # nail head
-run_test "head - basic" "nail head '$TEST_DATA' -n 5"
-run_test "head - with output" "nail head '$TEST_DATA' -n 3 -o '$TEMP_DIR/head_output.csv'"
-run_test "head - verbose" "nail head '$TEST_DATA' -n 2 --verbose"
-run_test "head - JSON output" "nail head '$TEST_DATA' -n 5 -f json -o '$TEMP_DIR/head_output.json'"
+run_test "head - basic" "\"$NAIL_PATH\" head '$TEST_DATA' -n 5"
+run_test "head - with output" "\"$NAIL_PATH\" head '$TEST_DATA' -n 3 -o '$TEMP_DIR/head_output.csv'"
+run_test "head - verbose" "\"$NAIL_PATH\" head '$TEST_DATA' -n 2 --verbose"
+run_test "head - JSON output" "\"$NAIL_PATH\" head '$TEST_DATA' -n 5 -f json -o '$TEMP_DIR/head_output.json'"
 
 # nail tail
-run_test "tail - basic" "nail tail '$TEST_DATA' -n 5"
-run_test "tail - with output" "nail tail '$TEST_DATA' -n 3 -o '$TEMP_DIR/tail_output.csv'"
-run_test "tail - verbose" "nail tail '$TEST_DATA' -n 2 --verbose"
+run_test "tail - basic" "\"$NAIL_PATH\" tail '$TEST_DATA' -n 5"
+run_test "tail - with output" "\"$NAIL_PATH\" tail '$TEST_DATA' -n 3 -o '$TEMP_DIR/tail_output.csv'"
+run_test "tail - verbose" "\"$NAIL_PATH\" tail '$TEST_DATA' -n 2 --verbose"
 
 # nail preview
-run_test "preview - basic" "nail preview '$TEST_DATA' -n 5"
-run_test "preview - with seed" "nail preview '$TEST_DATA' -n 3 --random 42"
-run_test "preview - output to file" "nail preview '$TEST_DATA' -n 5 -o '$TEMP_DIR/preview_output.csv'"
+run_test "preview - basic" "\"$NAIL_PATH\" preview '$TEST_DATA' -n 5"
+run_test "preview - with seed" "\"$NAIL_PATH\" preview '$TEST_DATA' -n 3 --random 42"
+run_test "preview - output to file" "\"$NAIL_PATH\" preview '$TEST_DATA' -n 5 -o '$TEMP_DIR/preview_output.csv'"
 
 # nail headers
-run_test "headers - basic" "nail headers '$TEST_DATA'"
-run_test "headers - with filter" "nail headers '$TEST_DATA' --filter '^(id|name).*'"
-run_test "headers - JSON output" "nail headers '$TEST_DATA' -f json -o '$TEMP_DIR/headers.json'"
+run_test "headers - basic" "\"$NAIL_PATH\" headers '$TEST_DATA'"
+run_test "headers - with filter" "\"$NAIL_PATH\" headers '$TEST_DATA' --filter '^(id|name).*'"
+run_test "headers - JSON output" "\"$NAIL_PATH\" headers '$TEST_DATA' -f json -o '$TEMP_DIR/headers.json'"
 
 # nail schema
-run_test "schema - basic" "nail schema '$TEST_DATA'"
-run_test "schema - verbose" "nail schema '$TEST_DATA' --verbose"
-run_test "schema - JSON output" "nail schema '$TEST_DATA' -f json -o '$TEMP_DIR/schema.json'"
+run_test "schema - basic" "\"$NAIL_PATH\" schema '$TEST_DATA'"
+run_test "schema - verbose" "\"$NAIL_PATH\" schema '$TEST_DATA' --verbose"
+run_test "schema - JSON output" "\"$NAIL_PATH\" schema '$TEST_DATA' -f json -o '$TEMP_DIR/schema.json'"
 
 # nail metadata (parquet specific)
-run_test "metadata - basic" "nail metadata '$TEMP_DIR/test_data.parquet'"
-run_test "metadata - all" "nail metadata '$TEMP_DIR/test_data.parquet' --all"
-run_test "metadata - detailed" "nail metadata '$TEMP_DIR/test_data.parquet' --schema --row-groups --detailed"
+run_test "metadata - basic" "\"$NAIL_PATH\" metadata '$TEMP_DIR/test_data.parquet'"
+run_test "metadata - all" "\"$NAIL_PATH\" metadata '$TEMP_DIR/test_data.parquet' --all"
+run_test "metadata - detailed" "\"$NAIL_PATH\" metadata '$TEMP_DIR/test_data.parquet' --schema --row-groups --detailed"
 
 # nail size
-run_test "size - basic" "nail size '$TEST_DATA'"
-run_test "size - with columns" "nail size '$TEST_DATA' --columns"
-run_test "size - with rows" "nail size '$TEST_DATA' --rows"
-run_test "size - comprehensive" "nail size '$TEST_DATA' --columns --rows"
+run_test "size - basic" "\"$NAIL_PATH\" size '$TEST_DATA'"
+run_test "size - with columns" "\"$NAIL_PATH\" size '$TEST_DATA' --columns"
+run_test "size - with rows" "\"$NAIL_PATH\" size '$TEST_DATA' --rows"
+run_test "size - comprehensive" "\"$NAIL_PATH\" size '$TEST_DATA' --columns --rows"
 
 # nail search
-run_test "search - basic value" "nail search '$TEST_DATA' --value 'Alice'"
-run_test "search - specific columns" "nail search '$TEST_DATA' --value 'Electronics' -c 'category'"
-run_test "search - case insensitive" "nail search '$TEST_DATA' --value 'ACTIVE' --ignore-case"
-run_test "search - exact match" "nail search '$TEST_DATA' --value 'active' --exact"
-run_test "search - rows only" "nail search '$TEST_DATA' --value 'Books' --rows"
+run_test "search - basic value" "\"$NAIL_PATH\" search '$TEST_DATA' --value 'Alice'"
+run_test "search - specific columns" "\"$NAIL_PATH\" search '$TEST_DATA' --value 'Electronics' -c 'category'"
+run_test "search - case insensitive" "\"$NAIL_PATH\" search '$TEST_DATA' --value 'ACTIVE' --ignore-case"
+run_test "search - exact match" "\"$NAIL_PATH\" search '$TEST_DATA' --value 'active' --exact"
+run_test "search - rows only" "\"$NAIL_PATH\" search '$TEST_DATA' --value 'Books' --rows"
 
 # ==========================================
 # DATA QUALITY TOOLS
@@ -156,9 +174,9 @@ run_test "search - rows only" "nail search '$TEST_DATA' --value 'Books' --rows"
 echo -e "\n${BLUE}=== DATA QUALITY TOOLS ===${NC}"
 
 # nail outliers
-run_test "outliers - IQR method" "nail outliers '$TEST_DATA' -c 'price' --method iqr"
-run_test "outliers - Z-score method" "nail outliers '$TEST_DATA' -c 'age' --method z-score"
-run_test "outliers - show values" "nail outliers '$TEST_DATA' -c 'price' --method iqr --show-values"
+run_test "outliers - IQR method" "\"$NAIL_PATH\" outliers '$TEST_DATA' -c 'price' --method iqr"
+run_test "outliers - Z-score method" "\"$NAIL_PATH\" outliers '$TEST_DATA' -c 'age' --method z-score"
+run_test "outliers - show values" "\"$NAIL_PATH\" outliers '$TEST_DATA' -c 'price' --method iqr --show-values"
 
 # ==========================================
 # STATISTICS & ANALYSIS
@@ -167,21 +185,21 @@ run_test "outliers - show values" "nail outliers '$TEST_DATA' -c 'price' --metho
 echo -e "\n${BLUE}=== STATISTICS & ANALYSIS ===${NC}"
 
 # nail stats
-run_test "stats - basic" "nail stats '$TEST_DATA'"
-run_test "stats - specific columns" "nail stats '$TEST_DATA' -c 'price,age,score'"
-run_test "stats - exhaustive" "nail stats '$TEST_DATA' --stats-type exhaustive"
-run_test "stats - output to file" "nail stats '$TEST_DATA' -o '$TEMP_DIR/stats.json'"
+run_test "stats - basic" "\"$NAIL_PATH\" stats '$TEST_DATA'"
+run_test "stats - specific columns" "\"$NAIL_PATH\" stats '$TEST_DATA' -c 'price,age,score'"
+run_test "stats - exhaustive" "\"$NAIL_PATH\" stats '$TEST_DATA' --stats-type exhaustive"
+run_test "stats - output to file" "\"$NAIL_PATH\" stats '$TEST_DATA' -o '$TEMP_DIR/stats.json'"
 
 # nail correlations
-run_test "correlations - basic" "nail correlations '$TEST_DATA'"
-run_test "correlations - specific columns" "nail correlations '$TEST_DATA' -c 'price,age,score'"
-run_test "correlations - kendall" "nail correlations '$TEST_DATA' --correlation-type kendall"
-run_test "correlations - matrix format" "nail correlations '$TEST_DATA' --correlation-matrix"
+run_test "correlations - basic" "\"$NAIL_PATH\" correlations '$TEST_DATA'"
+run_test "correlations - specific columns" "\"$NAIL_PATH\" correlations '$TEST_DATA' -c 'price,age,score'"
+run_test "correlations - kendall" "\"$NAIL_PATH\" correlations '$TEST_DATA' --type kendall"
+run_test "correlations - matrix format" "\"$NAIL_PATH\" correlations '$TEST_DATA' --matrix"
 
 # nail frequency
-run_test "frequency - single column" "nail frequency '$TEST_DATA' -c 'category'"
-run_test "frequency - multiple columns" "nail frequency '$TEST_DATA' -c 'category,status'"
-run_test "frequency - output to file" "nail frequency '$TEST_DATA' -c 'region' -o '$TEMP_DIR/frequency.csv'"
+run_test "frequency - single column" "\"$NAIL_PATH\" frequency '$TEST_DATA' -c 'category'"
+run_test "frequency - multiple columns" "\"$NAIL_PATH\" frequency '$TEST_DATA' -c 'category,status'"
+run_test "frequency - output to file" "\"$NAIL_PATH\" frequency '$TEST_DATA' -c 'region' -o '$TEMP_DIR/frequency.csv'"
 
 # ==========================================
 # DATA MANIPULATION
@@ -190,34 +208,34 @@ run_test "frequency - output to file" "nail frequency '$TEST_DATA' -c 'region' -
 echo -e "\n${BLUE}=== DATA MANIPULATION ===${NC}"
 
 # nail select
-run_test "select - columns" "nail select '$TEST_DATA' -c 'id,name,price'"
-run_test "select - rows" "nail select '$TEST_DATA' -r '1,3,5-10'"
-run_test "select - columns and rows" "nail select '$TEST_DATA' -c 'id,name' -r '1-5' -o '$TEMP_DIR/selected.csv'"
+run_test "select - columns" "\"$NAIL_PATH\" select '$TEST_DATA' -c 'id,name,price'"
+run_test "select - rows" "\"$NAIL_PATH\" select '$TEST_DATA' -r '1,3,5-10'"
+run_test "select - columns and rows" "\"$NAIL_PATH\" select '$TEST_DATA' -c 'id,name' -r '1-5' -o '$TEMP_DIR/selected.csv'"
 
 # nail drop
-run_test "drop - columns" "nail drop '$TEST_DATA' -c 'description' -o '$TEMP_DIR/dropped_cols.csv'"
-run_test "drop - rows" "nail drop '$TEST_DATA' -r '1,3,5' -o '$TEMP_DIR/dropped_rows.csv'"
+run_test "drop - columns" "\"$NAIL_PATH\" drop '$TEST_DATA' -c 'description' -o '$TEMP_DIR/dropped_cols.csv'"
+run_test "drop - rows" "\"$NAIL_PATH\" drop '$TEST_DATA' -r '1,3,5' -o '$TEMP_DIR/dropped_rows.csv'"
 
 # nail filter
-run_test "filter - column conditions" "nail filter '$TEST_DATA' -c 'price>100,age<40' -o '$TEMP_DIR/filtered.csv'"
-run_test "filter - numeric only" "nail filter '$TEST_DATA' --rows numeric-only -o '$TEMP_DIR/numeric_only.csv'"
-run_test "filter - no NaN" "nail filter '$TEST_DATA' --rows no-nan -o '$TEMP_DIR/no_nan.csv'"
+run_test "filter - column conditions" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'price>100,age<40' -o '$TEMP_DIR/filtered.csv'"
+run_test "filter - numeric only" "\"$NAIL_PATH\" filter '$TEST_DATA' --rows numeric-only -o '$TEMP_DIR/numeric_only.csv'"
+run_test "filter - no NaN" "\"$NAIL_PATH\" filter '$TEST_DATA' --rows no-nan -o '$TEMP_DIR/no_nan.csv'"
 
 # nail fill
-run_test "fill - with value" "nail fill '$TEST_DATA' --method value --value 0 -o '$TEMP_DIR/filled.csv'"
-run_test "fill - with mean" "nail fill '$TEST_DATA' -c 'price,age,score' --method mean -o '$TEMP_DIR/filled_mean.csv'"
+run_test "fill - with value" "\"$NAIL_PATH\" fill '$TEST_DATA' --method value --value 0 -o '$TEMP_DIR/filled.csv'"
+run_test "fill - with mean" "\"$NAIL_PATH\" fill '$TEST_DATA' -c 'price,age,score' --method mean -o '$TEMP_DIR/filled_mean.csv'"
 
 # nail rename
-run_test "rename - single column" "nail rename '$TEST_DATA' --column 'id=identifier' -o '$TEMP_DIR/renamed.csv'"
-run_test "rename - multiple columns" "nail rename '$TEST_DATA' --column 'id=identifier,name=full_name' -o '$TEMP_DIR/renamed_multi.csv'"
+run_test "rename - single column" "\"$NAIL_PATH\" rename '$TEST_DATA' --column 'id=identifier' -o '$TEMP_DIR/renamed.csv'"
+run_test "rename - multiple columns" "\"$NAIL_PATH\" rename '$TEST_DATA' --column 'id=identifier,name=full_name' -o '$TEMP_DIR/renamed_multi.csv'"
 
 # nail create
-run_test "create - single column" "nail create '$TEST_DATA' --column 'total=price*quantity' -o '$TEMP_DIR/created.csv'"
-run_test "create - multiple columns" "nail create '$TEST_DATA' --column 'total=price*quantity,profit=revenue-cost' -o '$TEMP_DIR/created_multi.csv'"
+run_test "create - single column" "\"$NAIL_PATH\" create '$TEST_DATA' --column 'total=price*quantity' -o '$TEMP_DIR/created.csv'"
+run_test "create - multiple columns" "\"$NAIL_PATH\" create '$TEST_DATA' --column 'total=price*quantity,profit=revenue-cost' -o '$TEMP_DIR/created_multi.csv'"
 
 # nail dedup
-run_test "dedup - row-wise" "nail dedup '$TEST_DATA' --row-wise -o '$TEMP_DIR/dedup_rows.csv'"
-run_test "dedup - by columns" "nail dedup '$TEST_DATA' --row-wise -c 'category,region' -o '$TEMP_DIR/dedup_by_cols.csv'"
+run_test "dedup - row-wise" "\"$NAIL_PATH\" dedup '$TEST_DATA' --row-wise -o '$TEMP_DIR/dedup_rows.csv'"
+run_test "dedup - by columns" "\"$NAIL_PATH\" dedup '$TEST_DATA' --row-wise -c 'category,region' -o '$TEMP_DIR/dedup_by_cols.csv'"
 
 # ==========================================
 # DATA SAMPLING & TRANSFORMATION
@@ -226,19 +244,19 @@ run_test "dedup - by columns" "nail dedup '$TEST_DATA' --row-wise -c 'category,r
 echo -e "\n${BLUE}=== DATA SAMPLING & TRANSFORMATION ===${NC}"
 
 # nail sample
-run_test "sample - random" "nail sample '$TEST_DATA' -n 10 -o '$TEMP_DIR/sample_random.csv'"
-run_test "sample - with seed" "nail sample '$TEST_DATA' -n 10 --random 42 -o '$TEMP_DIR/sample_seeded.csv'"
-run_test "sample - first" "nail sample '$TEST_DATA' -n 10 --method first -o '$TEMP_DIR/sample_first.csv'"
-run_test "sample - last" "nail sample '$TEST_DATA' -n 10 --method last -o '$TEMP_DIR/sample_last.csv'"
-run_test "sample - stratified" "nail sample '$TEST_DATA' -n 15 --method stratified --stratify-by category -o '$TEMP_DIR/sample_stratified.csv' 2>/dev/null"
+run_test "sample - random" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 10 -o '$TEMP_DIR/sample_random.csv'"
+run_test "sample - with seed" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 10 --random 42 -o '$TEMP_DIR/sample_seeded.csv'"
+run_test "sample - first" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 10 --method first -o '$TEMP_DIR/sample_first.csv'"
+run_test "sample - last" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 10 --method last -o '$TEMP_DIR/sample_last.csv'"
+run_test "sample - stratified" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 15 --method stratified --stratify-by category -o '$TEMP_DIR/sample_stratified.csv' 2>/dev/null"
 
 # nail shuffle
-run_test "shuffle - basic" "nail shuffle '$TEST_DATA' -o '$TEMP_DIR/shuffled.csv'"
-run_test "shuffle - with seed" "nail shuffle '$TEST_DATA' --random 42 -o '$TEMP_DIR/shuffled_seeded.csv'"
+run_test "shuffle - basic" "\"$NAIL_PATH\" shuffle '$TEST_DATA' -o '$TEMP_DIR/shuffled.csv'"
+run_test "shuffle - with seed" "\"$NAIL_PATH\" shuffle '$TEST_DATA' --random 42 -o '$TEMP_DIR/shuffled_seeded.csv'"
 
 # nail id
-run_test "id - create" "nail id '$TEST_DATA' --create --id-col-name 'record_id' -o '$TEMP_DIR/with_id.csv'"
-run_test "id - with prefix" "nail id '$TEST_DATA' --create --id-col-name 'record_id' --prefix 'REC-' -o '$TEMP_DIR/with_prefixed_id.csv'"
+run_test "id - create" "\"$NAIL_PATH\" id '$TEST_DATA' --create --id-col-name 'record_id' -o '$TEMP_DIR/with_id.csv'"
+run_test "id - with prefix" "\"$NAIL_PATH\" id '$TEST_DATA' --create --id-col-name 'record_id' --prefix 'REC-' -o '$TEMP_DIR/with_prefixed_id.csv'"
 
 # ==========================================
 # DATA COMBINATION
@@ -247,19 +265,19 @@ run_test "id - with prefix" "nail id '$TEST_DATA' --create --id-col-name 'record
 echo -e "\n${BLUE}=== DATA COMBINATION ===${NC}"
 
 # Create second dataset for merge/append tests
-nail sample "$TEST_DATA" -n 10 -o "$TEMP_DIR/right_table.csv"
-nail rename "$TEMP_DIR/right_table.csv" --column 'price=right_price,quantity=right_quantity' -o "$TEMP_DIR/right_table_renamed.csv"
+"$NAIL_PATH" sample "$TEST_DATA" -n 10 -o "$TEMP_DIR/right_table.csv"
+"$NAIL_PATH" rename "$TEMP_DIR/right_table.csv" --column 'price=right_price,quantity=right_quantity' -o "$TEMP_DIR/right_table_renamed.csv"
 
 # nail merge
-run_test "merge - inner join" "nail merge '$TEMP_DIR/small_sample.csv' --right '$TEMP_DIR/right_table_renamed.csv' --key id -o '$TEMP_DIR/merged.csv'"
-run_test "merge - left join" "nail merge '$TEMP_DIR/small_sample.csv' --right '$TEMP_DIR/right_table_renamed.csv' --left-join --key id -o '$TEMP_DIR/merged_left.csv'"
+run_test "merge - inner join" "\"$NAIL_PATH\" merge '$TEMP_DIR/small_sample.csv' --right '$TEMP_DIR/right_table_renamed.csv' --key id -o '$TEMP_DIR/merged.csv'"
+run_test "merge - left join" "\"$NAIL_PATH\" merge '$TEMP_DIR/small_sample.csv' --right '$TEMP_DIR/right_table_renamed.csv' --left-join --key id -o '$TEMP_DIR/merged_left.csv'"
 
 # nail append
-run_test "append - basic" "nail append '$TEMP_DIR/small_sample.csv' --files '$TEMP_DIR/right_table.csv' --ignore-schema -o '$TEMP_DIR/appended.csv'"
+run_test "append - basic" "\"$NAIL_PATH\" append '$TEMP_DIR/small_sample.csv' --files '$TEMP_DIR/right_table.csv' --ignore-schema -o '$TEMP_DIR/appended.csv'"
 
 # nail split
-run_test "split - basic" "nail split '$TEST_DATA' --ratio '0.7,0.3' --names 'train,test' --output-dir '$TEMP_DIR/splits/'"
-run_test "split - with seed" "nail split '$TEST_DATA' --ratio '0.6,0.4' --random 42 --output-dir '$TEMP_DIR/splits_seeded/'"
+run_test "split - basic" "\"$NAIL_PATH\" split '$TEST_DATA' --ratio '0.7,0.3' --names 'train,test' --output-dir '$TEMP_DIR/splits/'"
+run_test "split - with seed" "\"$NAIL_PATH\" split '$TEST_DATA' --ratio '0.6,0.4' --random 42 --output-dir '$TEMP_DIR/splits_seeded/'"
 
 # ==========================================
 # FILE OPTIMIZATION
@@ -268,9 +286,9 @@ run_test "split - with seed" "nail split '$TEST_DATA' --ratio '0.6,0.4' --random
 echo -e "\n${BLUE}=== FILE OPTIMIZATION ===${NC}"
 
 # nail optimize
-run_test "optimize - basic" "nail optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized.parquet'"
-run_test "optimize - with compression" "nail optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized_zstd.parquet' --compression zstd"
-run_test "optimize - with sorting" "nail optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized_sorted.parquet' --sort-by 'timestamp,id'"
+run_test "optimize - basic" "\"$NAIL_PATH\" optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized.parquet'"
+run_test "optimize - with compression" "\"$NAIL_PATH\" optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized_zstd.parquet' --compression zstd"
+run_test "optimize - with sorting" "\"$NAIL_PATH\" optimize '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/optimized_sorted.parquet' --sort-by 'timestamp,id'"
 
 # ==========================================
 # DATA ANALYSIS & TRANSFORMATION
@@ -279,13 +297,13 @@ run_test "optimize - with sorting" "nail optimize '$TEMP_DIR/test_data.parquet' 
 echo -e "\n${BLUE}=== DATA ANALYSIS & TRANSFORMATION ===${NC}"
 
 # nail binning
-run_test "binning - equal width" "nail binning '$TEST_DATA' -c 'age' -b 5 -o '$TEMP_DIR/binned_age.csv'"
-run_test "binning - custom bins" "nail binning '$TEST_DATA' -c 'price' -b '0,50,100,200,1000' --method custom -o '$TEMP_DIR/binned_price.csv'"
-run_test "binning - with labels" "nail binning '$TEST_DATA' -c 'score' -b 3 --labels 'Low,Medium,High' -o '$TEMP_DIR/binned_score.csv'"
+run_test "binning - equal width" "\"$NAIL_PATH\" binning '$TEST_DATA' -c 'age' -b 5 -o '$TEMP_DIR/binned_age.csv'"
+run_test "binning - custom bins" "\"$NAIL_PATH\" binning '$TEST_DATA' -c 'price' -b '0,50,100,200,1000' --method custom -o '$TEMP_DIR/binned_price.csv'"
+run_test "binning - with labels" "\"$NAIL_PATH\" binning '$TEST_DATA' -c 'score' -b 3 --labels 'Low,Medium,High' -o '$TEMP_DIR/binned_score.csv'"
 
 # nail pivot
-run_test "pivot - basic" "nail pivot '$TEST_DATA' -i 'category' -c 'status' -l 'price' -o '$TEMP_DIR/pivot.csv'"
-run_test "pivot - with mean" "nail pivot '$TEST_DATA' -i 'region' -c 'category' -l 'revenue' --agg mean -o '$TEMP_DIR/pivot_mean.csv'"
+run_test "pivot - basic" "\"$NAIL_PATH\" pivot '$TEST_DATA' -i 'category' -c 'status' -l 'price' -o '$TEMP_DIR/pivot.csv'"
+run_test "pivot - with mean" "\"$NAIL_PATH\" pivot '$TEST_DATA' -i 'region' -c 'category' -l 'revenue' --agg mean -o '$TEMP_DIR/pivot_mean.csv'"
 
 # ==========================================
 # FORMAT CONVERSION & UTILITY
@@ -294,16 +312,16 @@ run_test "pivot - with mean" "nail pivot '$TEST_DATA' -i 'region' -c 'category' 
 echo -e "\n${BLUE}=== FORMAT CONVERSION & UTILITY ===${NC}"
 
 # nail convert
-run_test "convert - CSV to Parquet" "nail convert '$TEST_DATA' -o '$TEMP_DIR/converted.parquet'"
-run_test "convert - CSV to JSON" "nail convert '$TEST_DATA' -o '$TEMP_DIR/converted.json'"
-run_test "convert - Parquet to CSV" "nail convert '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/converted_back.csv'"
+run_test "convert - CSV to Parquet" "\"$NAIL_PATH\" convert '$TEST_DATA' -o '$TEMP_DIR/converted.parquet'"
+run_test "convert - CSV to JSON" "\"$NAIL_PATH\" convert '$TEST_DATA' -o '$TEMP_DIR/converted.json'"
+run_test "convert - Parquet to CSV" "\"$NAIL_PATH\" convert '$TEMP_DIR/test_data.parquet' -o '$TEMP_DIR/converted_back.csv'"
 
 # nail count
-run_test "count - basic" "nail count '$TEST_DATA'"
-run_test "count - verbose" "nail count '$TEST_DATA' --verbose"
+run_test "count - basic" "\"$NAIL_PATH\" count '$TEST_DATA'"
+run_test "count - verbose" "\"$NAIL_PATH\" count '$TEST_DATA' --verbose"
 
 # nail update
-run_test "update - check" "nail update"
+run_test "update - check" "\"$NAIL_PATH\" update"
 
 # ==========================================
 # GLOBAL OPTIONS TESTS
@@ -312,10 +330,10 @@ run_test "update - check" "nail update"
 echo -e "\n${BLUE}=== GLOBAL OPTIONS TESTS ===${NC}"
 
 # Test global options with various commands
-run_test "global - verbose flag" "nail head '$TEST_DATA' -n 2 --verbose"
-run_test "global - jobs flag" "nail stats '$TEST_DATA' -j 2"
-run_test "global - format flag" "nail head '$TEST_DATA' -n 3 -f json"
-run_test "global - output flag" "nail schema '$TEST_DATA' -o '$TEMP_DIR/global_output.txt'"
+run_test "global - verbose flag" "\"$NAIL_PATH\" head '$TEST_DATA' -n 2 --verbose"
+run_test "global - jobs flag" "\"$NAIL_PATH\" stats '$TEST_DATA' -j 2"
+run_test "global - format flag" "\"$NAIL_PATH\" head '$TEST_DATA' -n 3 -f json"
+run_test "global - output flag" "\"$NAIL_PATH\" schema '$TEST_DATA' -o '$TEMP_DIR/global_output.txt'"
 
 # ==========================================
 # RESULTS SUMMARY

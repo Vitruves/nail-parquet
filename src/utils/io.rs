@@ -169,8 +169,9 @@ pub async fn write_data(df: &DataFusionDataFrame, path: &Path, format: Option<&F
 	
 	match output_format {
 		FileFormat::Parquet => {
-			// Check if DataFrame is empty and handle it specially
-			let row_count = df.clone().count().await.map_err(NailError::DataFusion)?;
+			// Check if DataFrame is empty by collecting batches and checking row count
+			let batches = df.clone().collect().await.map_err(NailError::DataFusion)?;
+			let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
 			if row_count == 0 {
 				// Create empty Parquet file
 				write_empty_parquet_file(df, path).await?;
@@ -183,8 +184,9 @@ pub async fn write_data(df: &DataFusionDataFrame, path: &Path, format: Option<&F
 			}
 		},
 		FileFormat::Csv => {
-			// Check if DataFrame is empty and handle it specially
-			let row_count = df.clone().count().await.map_err(NailError::DataFusion)?;
+			// Check if DataFrame is empty by collecting batches and checking row count
+			let batches = df.clone().collect().await.map_err(NailError::DataFusion)?;
+			let row_count: usize = batches.iter().map(|batch| batch.num_rows()).sum();
 			if row_count == 0 {
 				// Create empty CSV file with headers
 				write_empty_csv_file(df, path).await?;
