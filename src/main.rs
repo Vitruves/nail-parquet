@@ -46,6 +46,7 @@ async fn run() -> NailResult<()> {
 		commands::Commands::Pivot(args) => commands::pivot::execute(args).await,
 		commands::Commands::Merge(args) => commands::merge::execute(args).await,
 		commands::Commands::Append(args) => commands::append::execute(args).await,
+		commands::Commands::Sort(args) => commands::sort::execute(args).await,
 		commands::Commands::Split(args) => commands::split::execute(args).await,
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
 		commands::Commands::Optimize(args) => commands::optimize::execute(args).await,

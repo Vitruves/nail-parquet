@@ -254,6 +254,18 @@ run_test "sample - stratified" "\"$NAIL_PATH\" sample '$TEST_DATA' -n 15 --metho
 run_test "shuffle - basic" "\"$NAIL_PATH\" shuffle '$TEST_DATA' -o '$TEMP_DIR/shuffled.csv'"
 run_test "shuffle - with seed" "\"$NAIL_PATH\" shuffle '$TEST_DATA' --random 42 -o '$TEMP_DIR/shuffled_seeded.csv'"
 
+# nail sort
+run_test "sort - basic all columns" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'all' -o '$TEMP_DIR/sorted_all.csv'"
+run_test "sort - specific columns" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'price,age' -o '$TEMP_DIR/sorted_cols.csv'"
+run_test "sort - descending" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'price' -d true -o '$TEMP_DIR/sorted_desc.csv'"
+run_test "sort - numeric strategy" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'price,age' -s 'numeric,numeric' -o '$TEMP_DIR/sorted_numeric.csv'"
+run_test "sort - alphabetic strategy" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'name,category' -s 'alphabetic' --case-insensitive -o '$TEMP_DIR/sorted_alpha.csv'"
+run_test "sort - nulls first" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'score' --nulls 'first' -o '$TEMP_DIR/sorted_nulls_first.csv'"
+run_test "sort - nulls skip" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'score,price' --nulls 'skip' -o '$TEMP_DIR/sorted_nulls_skip.csv'"
+run_test "sort - mixed strategies" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'category,price,age' -s 'alphabetic,numeric,numeric' -d 'false,true,false' -o '$TEMP_DIR/sorted_mixed.csv'"
+run_test "sort - date strategy" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'timestamp' -s 'date' -o '$TEMP_DIR/sorted_date.csv'"
+run_test "sort - verbose" "\"$NAIL_PATH\" sort '$TEST_DATA' -c 'id' --verbose"
+
 # nail id
 run_test "id - create" "\"$NAIL_PATH\" id '$TEST_DATA' --create --id-col-name 'record_id' -o '$TEMP_DIR/with_id.csv'"
 run_test "id - with prefix" "\"$NAIL_PATH\" id '$TEST_DATA' --create --id-col-name 'record_id' --prefix 'REC-' -o '$TEMP_DIR/with_prefixed_id.csv'"

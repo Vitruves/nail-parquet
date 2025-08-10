@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nail")]
 #[command(about = "A fast parquet utility written in Rust")]
-#[command(version = "1.6.4")]
+#[command(version = "1.6.5")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()

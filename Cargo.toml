@@ -1,9 +1,9 @@
 [package]
 name = "nail-parquet"
-version = "1.6.4"
+version = "1.6.5"
 edition = "2021"
 authors = ["Johan HG Natter"]
-description = "A fast parquet utility written in Rust"
+description = "A fast parquet cli utility written in Rust"
 license = "MIT"
 repository = "https://github.com/Vitruves/nail-parquet"
 

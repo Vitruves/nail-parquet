@@ -24,6 +24,7 @@ pub mod filter;
 pub mod rename;
 pub mod search;
 pub mod select;
+pub mod sort;
 
 // Data Transformation
 pub mod binning;
@@ -129,6 +130,9 @@ pub enum Commands {
 	
 	#[command(about = "Show data size information")]
 	Size(size::SizeArgs),
+	
+	#[command(about = "Sort data by columns with various strategies")]
+	Sort(sort::SortArgs),
 	
 	#[command(about = "Split data into multiple files")]
 	Split(split::SplitArgs),
