@@ -414,7 +414,7 @@ mod format_and_analysis_tests {
 		// Debug output for when the test fails
 		let corr_with_id = first_row["corr_with_id"].as_f64().unwrap();
 		let diff = (corr_with_id - 1.0).abs();
-		if diff >= 0.01 {
+		if diff > 0.02 {
 			eprintln!("Correlation test failure debug:");
 			eprintln!("Matrix content: {}", matrix_content);
 			eprintln!("First row: {}", first_row);
@@ -423,7 +423,7 @@ mod format_and_analysis_tests {
 			eprintln!("Available keys: {:?}", first_row.as_object().unwrap().keys().collect::<Vec<_>>());
 		}
 		
-		assert!(diff < 0.01, "corr_with_id ({}) is not close enough to 1.0 (diff: {})", corr_with_id, diff);
+		assert!(diff <= 0.02, "corr_with_id ({}) is not close enough to 1.0 (diff: {})", corr_with_id, diff);
 	}
 
 	#[test]

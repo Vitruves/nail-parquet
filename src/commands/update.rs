@@ -31,9 +31,11 @@ const CRATE_NAME: &str = "nail-parquet";
 
 const RELEASE_NOTE: &str = concat!(
 	"Release note version 1.6.5:\n",
-    "Added sort command\n",
-    "Sorting supports many date types and sorting strategies\n", 
-	"Various bug fixes and improvements"
+    "- Added sort command:\n",
+    "  Sorting supports many date types and sorting strategies\n",
+	"- Proper implementation of Kendall Tau correlation\n",
+	"- Implemented table output for correllation's --matrix command", 
+	"- Various bug fixes and improvements"
 );
 
 //////////////////////////////////////////////////////////////////////////////////////////

@@ -383,14 +383,32 @@ async fn calculate_correlation_matrix(
 					},
 					CorrelationType::Kendall => {
 						format!(
-							"WITH ranked_data AS (
+							"WITH indexed_data AS (
 								SELECT 
-									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
-									ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+									\"{}\", \"{}\",
+									ROW_NUMBER() OVER() as rn
 								FROM {}
-							) 
-							SELECT CORR(rank1, rank2) * 0.816 as correlation FROM ranked_data",
-							col1, col2, table_name
+							),
+							data_pairs AS (
+								SELECT 
+									t1.\"{}\" as x1, t1.\"{}\" as y1,
+									t2.\"{}\" as x2, t2.\"{}\" as y2
+								FROM indexed_data t1
+								CROSS JOIN indexed_data t2
+								WHERE t1.rn < t2.rn
+							),
+							concordance AS (
+								SELECT 
+									SUM(CASE 
+										WHEN (x1 > x2 AND y1 > y2) OR (x1 < x2 AND y1 < y2) THEN 1
+										WHEN (x1 > x2 AND y1 < y2) OR (x1 < x2 AND y1 > y2) THEN -1
+										ELSE 0
+									END) as kendall_s,
+									COUNT(*) as n_pairs
+								FROM data_pairs
+							)
+							SELECT kendall_s::FLOAT / n_pairs::FLOAT as correlation FROM concordance",
+							col1, col2, table_name, col1, col2, col1, col2
 						)
 					}
 				};
@@ -399,8 +417,21 @@ async fn calculate_correlation_matrix(
 				let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
 				let corr_val = if let Some(batch) = batches.first() {
 					if batch.num_rows() > 0 {
-						let corr_array = batch.column(0).as_any().downcast_ref::<datafusion::arrow::array::Float64Array>().unwrap();
-						corr_array.value(0)
+						let column = batch.column(0);
+						// Try different numeric types
+						if let Some(float_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Float64Array>() {
+							float_array.value(0)
+						} else if let Some(float_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Float32Array>() {
+							float_array.value(0) as f64
+						} else if let Some(int_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>() {
+							int_array.value(0) as f64
+						} else if let Some(int_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Int32Array>() {
+							int_array.value(0) as f64
+						} else {
+							// Fallback: log the type and return 0
+							eprintln!("Warning: Unknown column type in correlation calculation: {:?}", column.data_type());
+							0.0
+						}
 					} else {
 						0.0
 					}
@@ -475,14 +506,32 @@ async fn calculate_correlation_pairs(
 				},
 				CorrelationType::Kendall => {
 					format!(
-						"WITH ranked_data AS (
+						"WITH indexed_data AS (
 							SELECT 
-								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank1,
-								ROW_NUMBER() OVER (ORDER BY \"{}\") as rank2
+								\"{}\", \"{}\",
+								ROW_NUMBER() OVER() as rn
 							FROM {}
-						) 
-						SELECT '{}' as column1, '{}' as column2, ROUND(CORR(rank1, rank2) * 0.816, {}) as correlation FROM ranked_data",
-						col1, col2, table_name, col1, col2, digits
+						),
+						data_pairs AS (
+							SELECT 
+								t1.\"{}\" as x1, t1.\"{}\" as y1,
+								t2.\"{}\" as x2, t2.\"{}\" as y2
+							FROM indexed_data t1
+							CROSS JOIN indexed_data t2
+							WHERE t1.rn < t2.rn
+						),
+						concordance AS (
+							SELECT 
+								SUM(CASE 
+									WHEN (x1 > x2 AND y1 > y2) OR (x1 < x2 AND y1 < y2) THEN 1
+									WHEN (x1 > x2 AND y1 < y2) OR (x1 < x2 AND y1 > y2) THEN -1
+									ELSE 0
+								END) as kendall_s,
+								COUNT(*) as n_pairs
+							FROM data_pairs
+						)
+						SELECT '{}' as column1, '{}' as column2, ROUND(kendall_s::FLOAT / n_pairs::FLOAT, {}) as correlation FROM concordance",
+						col1, col2, table_name, col1, col2, col1, col2, col1, col2, digits
 					)
 				}
 			};

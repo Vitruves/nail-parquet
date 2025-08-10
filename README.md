@@ -591,6 +591,60 @@ nail shuffle data.parquet -o shuffled.parquet --verbose
 
 - `--random SEED` - Random seed for reproducible results
 
+#### `nail sort`
+
+Sort data by one or more columns with flexible sorting strategies and null handling.
+
+```bash
+# Sort by all columns (auto-detect data types)
+nail sort data.parquet
+
+# Sort by specific columns
+nail sort data.parquet -c "price,date"
+
+# Sort with specific strategies
+nail sort data.parquet -c "date,amount,name" -s "date,numeric,alphabetic"
+
+# Descending sort
+nail sort data.parquet -c "revenue" -d true
+
+# Multiple columns with mixed directions
+nail sort data.parquet -c "category,price" -d "false,true"
+
+# Handle nulls differently
+nail sort data.parquet -c "score" --nulls first
+nail sort data.parquet -c "rating" --nulls skip
+
+# Case-insensitive alphabetic sorting
+nail sort data.parquet -c "name,category" -s "alphabetic" --case-insensitive
+
+# Sort dates with custom format
+nail sort data.parquet -c "date" -s "date" --date-format "mm-dd-yyyy"
+
+# Sort time values with custom format
+nail sort data.parquet -c "timestamp" -s "hour" --hour-format "hh:mm:ss"
+```
+
+**Options:**
+
+- `-c, --column COLUMNS` - Columns to sort by (comma-separated or 'all') (default: all)
+- `-s, --strategy STRATEGIES` - Sort strategy per column: `numeric`, `date`, `alphabetic`, `alphabetic-numeric`, `numeric-alphabetic`, `hour`, `auto` (comma-separated)
+- `-d, --descending FLAGS` - Sort in descending order (comma-separated true/false per column)
+- `--nulls HANDLING` - Null value handling: `first`, `last`, `skip` (default: last)
+- `--date-format FORMAT` - Date format pattern (e.g., 'mm-dd-yyyy', 'dd/mm/yyyy', 'yyyy-mm-dd')
+- `--hour-format FORMAT` - Time format pattern (e.g., 'hh:mm:ss', 'mm:ss')
+- `--case-insensitive` - Case-insensitive alphabetic sorting
+
+**Sort Strategies:**
+
+- **auto**: Automatically detect based on data type
+- **numeric**: Sort numerically (converts strings to numbers if needed)
+- **date**: Sort by date (supports custom formats)
+- **alphabetic**: Sort alphabetically (supports case-insensitive)
+- **alphabetic-numeric**: Sort alphabetically first, then numerically
+- **numeric-alphabetic**: Sort numerically first, then alphabetically
+- **hour**: Sort by time/hour values
+
 #### `nail id`
 
 Add a unique ID column to the dataset.

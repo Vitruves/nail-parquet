@@ -62,7 +62,12 @@ pub async fn display_dataframe(
 					display_as_json(df).await?;
 				},
 				Some(OutputFormat::Text) | None => {
-					display_as_table(df).await?;
+					// Check if this is a correlation matrix and display accordingly
+					if is_correlation_matrix(df) {
+						display_correlation_matrix(df).await?;
+					} else {
+						display_as_table(df).await?;
+					}
 				},
 				_ => {
 					return Err(crate::error::NailError::InvalidArgument(
@@ -501,5 +506,93 @@ fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -
 			},
 		}
 	}
+}
+
+pub fn is_correlation_matrix(df: &DataFrame) -> bool {
+	let schema = df.schema();
+	if let Some(first_field) = schema.fields().first() {
+		// Check if first column is named 'variable' and other columns start with 'corr_with_'
+		first_field.name() == "variable" && 
+		schema.fields().iter().skip(1).all(|f| f.name().starts_with("corr_with_"))
+	} else {
+		false
+	}
+}
+
+pub async fn display_correlation_matrix(df: &DataFrame) -> NailResult<()> {
+	let batches = df.clone().collect().await?;
+	let schema = df.schema();
+	
+	if batches.is_empty() {
+		println!("{}No correlation data to display{}", DIM, RESET);
+		return Ok(());
+	}
+	
+	// Extract column names from schema - skip 'variable' column, get actual column names from corr_with_ prefixes
+	let mut col_names = Vec::new();
+	for field in schema.fields().iter().skip(1) {
+		if let Some(col_name) = field.name().strip_prefix("corr_with_") {
+			col_names.push(col_name.replace("_", "."));
+		}
+	}
+	
+	if col_names.is_empty() {
+		return display_as_table(df).await; // Fallback to regular table if not a proper matrix
+	}
+	
+	// Calculate column widths - minimum 8 characters for each correlation value
+	let col_width = 8;
+	let var_col_width = col_names.iter().map(|s| s.len()).max().unwrap_or(8).max(8);
+	
+	// Print header
+	print!("{:<width$}", "", width = var_col_width + 2);
+	for col_name in &col_names {
+		print!("{:>width$}", col_name, width = col_width);
+	}
+	println!();
+	
+	// Print each row
+	for batch in &batches {
+		for row_idx in 0..batch.num_rows() {
+			// Get row variable name
+			let var_column = batch.column(0);
+			let var_name = if let Some(string_array) = var_column.as_any().downcast_ref::<StringArray>() {
+				string_array.value(row_idx).to_string()
+			} else {
+				format!("row_{}", row_idx)
+			};
+			
+			// Print row name
+			print!("{:<width$}  ", var_name, width = var_col_width);
+			
+			// Print correlation values
+			for col_idx in 1..batch.num_columns() {
+				let column = batch.column(col_idx);
+				if column.is_null(row_idx) {
+					print!("{:>width$}", "NULL", width = col_width);
+				} else if let Some(float_array) = column.as_any().downcast_ref::<Float64Array>() {
+					let val = float_array.value(row_idx);
+					print!("{:>width$.3}", val, width = col_width);
+				} else if let Some(int_array) = column.as_any().downcast_ref::<Int64Array>() {
+					let val = int_array.value(row_idx) as f64;
+					print!("{:>width$.3}", val, width = col_width);
+				} else if let Some(int_array) = column.as_any().downcast_ref::<Int32Array>() {
+					let val = int_array.value(row_idx) as f64;
+					print!("{:>width$.3}", val, width = col_width);
+				} else {
+					// Fallback: try to extract from debug representation
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					if let Ok(val) = extract_numeric_from_debug(&debug_str).parse::<f64>() {
+						print!("{:>width$.3}", val, width = col_width);
+					} else {
+						print!("{:>width$}", "N/A", width = col_width);
+					}
+				}
+			}
+			println!();
+		}
+	}
+	
+	Ok(())
 }
 

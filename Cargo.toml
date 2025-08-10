@@ -3,7 +3,7 @@ name = "nail-parquet"
 version = "1.6.5"
 edition = "2021"
 authors = ["Johan HG Natter"]
-description = "A fast parquet cli utility written in Rust"
+description = "A comprehensive cli data utility with parquet, xlsx and csv support"
 license = "MIT"
 repository = "https://github.com/Vitruves/nail-parquet"
 
