@@ -960,7 +960,9 @@ nail provides detailed error messages for common issues:
 - **Operating System**: Linux (Ubuntu 24.04+ recommended), macOS, Windows
 - **Memory**: 4GB+ RAM (8GB+ recommended for large datasets)
 - **Storage**: SSD recommended for large file operations
-- **Dependencies**: None (statically linked binary)
+- **Dependencies**:
+  - Darwin: none
+  - Linux: `pkg-config` and `openssl`
 
 ## License
 
