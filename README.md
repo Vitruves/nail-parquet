@@ -17,6 +17,15 @@ A high-performance command-line utility for working with Parquet files, built wi
 - **Flexible output**: console display or file output in multiple formats
 - **Production-ready** with robust error handling and verbose logging
 
+## System Requirements
+
+- **Operating System**: Linux (Ubuntu 24.04+ recommended), macOS, Windows
+- **Memory**: 4GB+ RAM (8GB+ recommended for large datasets)
+- **Storage**: SSD recommended for large file operations
+- **Dependencies**:
+  - Darwin: none
+  - Linux: `pkg-config` and `openssl` (package names might vary depending on your distro)
+
 ## Installation
 
 ```
@@ -954,15 +963,6 @@ nail provides detailed error messages for common issues:
 - **Schema mismatches**: Detailed information about incompatible schemas in merge/append operations
 - **Invalid expressions**: Specific feedback on malformed filter conditions or column patterns
 - **Memory issues**: Graceful handling of large datasets with appropriate error messages
-
-## System Requirements
-
-- **Operating System**: Linux (Ubuntu 24.04+ recommended), macOS, Windows
-- **Memory**: 4GB+ RAM (8GB+ recommended for large datasets)
-- **Storage**: SSD recommended for large file operations
-- **Dependencies**:
-  - Darwin: none
-  - Linux: `pkg-config` and `openssl`
 
 ## License
 
