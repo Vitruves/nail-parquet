@@ -12,6 +12,7 @@ pub mod tail;
 
 // Data Analysis
 pub mod correlations;
+pub mod describe;
 pub mod frequency;
 pub mod outliers;
 pub mod stats;
@@ -36,6 +37,7 @@ pub mod shuffle;
 
 // Data Combination
 pub mod append;
+pub mod diff;
 pub mod merge;
 pub mod split;
 
@@ -70,7 +72,13 @@ pub enum Commands {
 	
 	#[command(about = "Remove duplicate rows or columns")]
 	Dedup(dedup::DedupArgs),
-	
+
+	#[command(about = "Show global file overview and metadata")]
+	Describe(describe::DescribeArgs),
+
+	#[command(about = "Compare two datasets and show differences")]
+	Diff(diff::DiffArgs),
+
 	#[command(about = "Remove columns or rows")]
 	Drop(drop::DropArgs),
 	

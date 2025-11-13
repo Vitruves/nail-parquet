@@ -244,6 +244,110 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 	Ok(combined)
 }
 
+pub async fn calculate_custom_stats(
+	df: &DataFrame,
+	columns: &[String],
+	percentiles: &[f64],
+	categorical_only: bool,
+) -> NailResult<DataFrame> {
+	let ctx = crate::utils::create_context().await?;
+	let table_name = "temp_table";
+	ctx.register_table(table_name, df.clone().into_view())?;
+
+	let mut stats_rows = Vec::new();
+
+	for column in columns {
+		let field = df.schema().field_with_name(None, column);
+		if field.is_err() {
+			continue;
+		}
+
+		let field = field.unwrap();
+		let is_numeric = matches!(
+			field.data_type(),
+			datafusion::arrow::datatypes::DataType::Int64
+				| datafusion::arrow::datatypes::DataType::Float64
+				| datafusion::arrow::datatypes::DataType::Int32
+				| datafusion::arrow::datatypes::DataType::Float32
+				| datafusion::arrow::datatypes::DataType::Int16
+				| datafusion::arrow::datatypes::DataType::Int8
+				| datafusion::arrow::datatypes::DataType::UInt64
+				| datafusion::arrow::datatypes::DataType::UInt32
+				| datafusion::arrow::datatypes::DataType::UInt16
+				| datafusion::arrow::datatypes::DataType::UInt8
+		);
+
+		let is_string = matches!(
+			field.data_type(),
+			datafusion::arrow::datatypes::DataType::Utf8
+				| datafusion::arrow::datatypes::DataType::LargeUtf8
+		);
+
+		if is_numeric && !categorical_only {
+			// Build percentile queries
+			let percentile_queries: Vec<String> = percentiles
+				.iter()
+				.map(|p| {
+					format!(
+						"APPROX_PERCENTILE_CONT(\"{}\", {}) as \"p{}\"",
+						column,
+						p,
+						(p * 100.0) as i32
+					)
+				})
+				.collect();
+
+			let stats_sql = format!(
+				"SELECT
+					'{}' as column_name,
+					COUNT(\"{}\") as count,
+					AVG(\"{}\") as mean,
+					STDDEV(\"{}\") as std_dev,
+					MIN(\"{}\") as min_val,
+					{},
+					MAX(\"{}\") as max_val
+				FROM {}",
+				column,
+				column,
+				column,
+				column,
+				column,
+				percentile_queries.join(", "),
+				column,
+				table_name
+			);
+
+			let stats_df = ctx.sql(&stats_sql).await?;
+			stats_rows.push(stats_df);
+		} else if is_string {
+			let stats_sql = format!(
+				"SELECT
+					'{}' as column_name,
+					COUNT(\"{}\") as count,
+					COUNT(DISTINCT \"{}\") as unique
+				FROM {}",
+				column, column, column, table_name
+			);
+
+			let stats_df = ctx.sql(&stats_sql).await?;
+			stats_rows.push(stats_df);
+		}
+	}
+
+	if stats_rows.is_empty() {
+		return Err(NailError::Statistics("No suitable columns for statistics".to_string()));
+	}
+
+	// Union all stats
+	let mut iter = stats_rows.into_iter();
+	let mut combined = iter.next().unwrap();
+	for df_stats in iter {
+		combined = combined.union(df_stats)?;
+	}
+
+	Ok(combined)
+}
+
 pub async fn calculate_hypothesis_tests(_df: &DataFrame, _columns: &[String]) -> NailResult<DataFrame> {
 	Err(NailError::Statistics("Hypothesis tests not yet implemented".to_string()))
 }
