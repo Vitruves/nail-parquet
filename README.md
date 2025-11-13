@@ -1,9 +1,15 @@
-# nail - Fast Parquet Utility
+# nail - Lightning-Fast Data Analysis CLI
 
-A high-performance command-line utility for working with Parquet files, built with Rust and DataFusion.
+**nail** is a high-performance command-line tool for analyzing, transforming, and exploring data files at blazing speed. Built with Rust, Apache Arrow, and DataFusion, it handles Parquet, CSV, JSON, and Excel files with ease—perfect for data engineers, analysts, and scientists who need quick insights without loading heavy tools.
+
+**🚀 Why nail?** Process gigabyte-scale datasets in seconds • SQL-powered operations • Zero configuration • Works offline • Single binary
+
+[![Crates.io](https://img.shields.io/crates/v/nail-parquet.svg)](https://crates.io/crates/nail-parquet)
+[![Downloads](https://img.shields.io/crates/d/nail-parquet.svg)](https://crates.io/crates/nail-parquet)
+[![License](https://img.shields.io/crates/l/nail-parquet.svg)](https://github.com/Vitruves/nail-parquet/blob/main/LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org)
 
 ![nail_parquet](https://github.com/user-attachments/assets/0251facf-0e9b-49d0-bbd4-5dd8a288997c)
-
 
 ## Features
 
@@ -25,6 +31,21 @@ A high-performance command-line utility for working with Parquet files, built wi
 - **Dependencies**:
   - Darwin: none
   - Linux: `pkg-config` and `openssl` (package names might vary depending on your distro)
+
+## Use Cases
+
+**nail** is the perfect tool for:
+
+- **Parquet file viewer** - Quick inspection and exploration without Spark or Pandas
+- **CSV to Parquet converter** - Fast format conversion with automatic compression
+- **Excel data analysis** - Analyze `.xlsx` files without Excel or LibreOffice
+- **Command-line data science** - Perfect for SSH environments and automation scripts
+- **Offline data tool** - No cloud, no server dependencies - works completely offline
+- **ETL pipelines** - Transform and validate data in shell scripts and CI/CD
+- **Data quality checks** - Validate schemas, detect outliers, find duplicates quickly
+- **Quick statistics** - Get descriptive stats and correlations in seconds
+- **Large file processing** - Handle gigabyte-scale datasets that crash spreadsheet tools
+- **Pandas alternative** - 10x faster for read-only analysis tasks on large files
 
 ## Installation
 
@@ -58,6 +79,27 @@ All commands support these global flags:
 ## Commands
 
 ### Data Inspection
+
+#### `nail describe`
+
+Show comprehensive global file overview with metadata, dimensions, column types, and data quality metrics.
+
+```bash
+# Display file overview with colored output
+nail describe data.parquet
+
+# Include verbose logging
+nail describe data.parquet --verbose
+```
+
+**Output includes:**
+
+- File metadata (path, format, size, timestamps)
+- Dimensions (rows, columns, estimated memory)
+- Column type distribution (numeric, string, date/time, boolean)
+- Data quality metrics (density, null values, duplicates)
+- Storage efficiency
+- Column name listings by type
 
 #### `nail head`
 
@@ -290,7 +332,7 @@ nail outliers data.parquet -c "score" --method isolation-forest
 
 #### `nail stats`
 
-Compute statistical summaries for numeric and categorical columns.
+Compute statistical summaries for numeric and categorical columns with flexible percentile calculations and type filtering.
 
 ```bash
 # Basic statistics (mean, Q25, Q50, Q75, unique count)
@@ -305,6 +347,15 @@ nail stats data.parquet -c "price,volume,quantity"
 # Statistics with regex column selection
 nail stats data.parquet -c "^(price|vol).*" --stats-type exhaustive
 
+# Custom percentiles
+nail stats data.parquet -c "revenue" --percentiles "0.1,0.5,0.9,0.95,0.99"
+
+# Numeric columns only
+nail stats data.parquet --numeric-only
+
+# Categorical columns only
+nail stats data.parquet --categorical-only
+
 # Save statistics to file
 nail stats data.parquet --stats-type basic -o stats.json
 ```
@@ -312,7 +363,10 @@ nail stats data.parquet --stats-type basic -o stats.json
 **Options:**
 
 - `-c, --columns PATTERN` - Comma-separated column names or regex patterns
-- `--stats-type TYPE` - Statistics type: `basic`, `exhaustive`, `hypothesis` (default: basic)
+- `-t, --stats-type TYPE` - Statistics type: `basic`, `exhaustive`, `hypothesis` (default: basic)
+- `-p, --percentiles VALUES` - Custom percentiles (comma-separated, e.g., '0.1,0.5,0.9')
+- `--numeric-only` - Include only numeric columns
+- `--categorical-only` - Include only categorical (string) columns
 
 **Statistics Types:**
 
@@ -501,6 +555,7 @@ nail rename data.parquet --column "id=user_id,val=value" -o renamed.parquet
 ```
 
 **Options:**
+
 - `-c, --column SPECS` - Column rename specs (`before=after`), comma-separated.
 
 #### `nail create`
@@ -676,6 +731,44 @@ nail id data.parquet --create -o data_with_ids.parquet
 - `--id-col-name NAME` - ID column name (default: "id")
 
 ### Data Combination
+
+#### `nail diff`
+
+Compare two datasets and show differences using key-based or row-based comparison.
+
+```bash
+# Compare files using key columns
+nail diff old_data.parquet --compare new_data.parquet --keys "id,timestamp"
+
+# Show only changed rows
+nail diff v1.parquet --compare v2.parquet --keys "id" --changes-only
+
+# Show rows only in left file
+nail diff current.parquet --compare archive.parquet --keys "record_id" --left-only
+
+# Show rows only in right file
+nail diff baseline.parquet --compare updated.parquet --keys "user_id" --right-only
+
+# Row-by-row positional comparison (no keys)
+nail diff file1.csv --compare file2.csv
+
+# Save diff results
+nail diff old.parquet --compare new.parquet --keys "id" -o differences.parquet
+```
+
+**Options:**
+
+- `-c, --compare FILE` - Second file to compare with (required)
+- `-k, --keys COLUMNS` - Columns to use as primary key for comparison (comma-separated)
+- `--changes-only` - Show only rows that differ
+- `--left-only` - Show only rows in left file
+- `--right-only` - Show only rows in right file
+
+**Output:**
+
+- `diff_status` column indicates: `ADDED`, `REMOVED`, or `MODIFIED`
+- For key-based: Shows matching records with left/right values
+- For row-based: Shows records by position with left/right values
 
 #### `nail merge`
 
@@ -878,11 +971,17 @@ nail update --verbose
 ### Basic Data Exploration
 
 ```bash
-# Quick dataset overview
+# Quick dataset overview with comprehensive file info
+nail describe sales_data.parquet
+
+# Traditional exploration
 nail schema sales_data.parquet
 nail size sales_data.parquet --columns --rows
 nail head sales_data.parquet -n 10
 nail stats sales_data.parquet --stats-type basic
+
+# Advanced statistics with custom percentiles
+nail stats sales_data.parquet -c "revenue,profit" --percentiles "0.25,0.5,0.75,0.90,0.95,0.99"
 
 # Column inspection
 nail headers sales_data.parquet --filter "price"
@@ -895,6 +994,12 @@ nail frequency sales_data.parquet -c "category,region,status"
 ### Data Quality Investigation
 
 ```bash
+# Comprehensive data quality overview
+nail describe data.parquet
+
+# Compare datasets to find differences
+nail diff yesterday.parquet --compare today.parquet --keys "id" --changes-only
+
 # Search for problematic values
 nail search data.parquet --value "error" --ignore-case
 nail search data.parquet --value "null" -c "critical_fields" --rows

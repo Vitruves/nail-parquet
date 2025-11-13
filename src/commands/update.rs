@@ -30,11 +30,19 @@ const CRATE_NAME: &str = "nail-parquet";
 // Write your release notes using concat! for multiple lines:
 
 const RELEASE_NOTE: &str = concat!(
-	"Release note version 1.6.5:\n",
-    "- Added sort command:\n",
-    "  Sorting supports many date types and sorting strategies\n",
-	"- Proper implementation of Kendall Tau correlation\n",
-	"- Implemented table output for correllation's --matrix command", 
+	"Release note version 1.6.6:\n",
+	"- Added describe command:\n",
+	"  Show global file overview with enhanced metrics and beautiful colored output\n",
+	"  Displays file metadata, dimensions, column types, data quality metrics\n",
+	"  Shows duplicate estimation, data density, storage efficiency\n",
+	"  Lists column names by type (first 10 shown)\n",
+	"- Added diff command:\n",
+	"  Compare two datasets with key-based or row-based comparison\n",
+	"  Supports --keys, --changes-only, --left-only, --right-only flags\n",
+	"- Enhanced stats command:\n",
+	"  Added --percentiles for custom percentile calculations\n",
+	"  Added --numeric-only and --categorical-only filters\n",
+	"  Better separation between numeric and categorical stats\n",
 	"- Various bug fixes and improvements"
 );
 

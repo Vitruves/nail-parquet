@@ -2199,7 +2199,7 @@ dependencies = [
 
 [[package]]
 name = "nail-parquet"
-version = "1.6.5"
+version = "1.6.6"
 dependencies = [
  "arrow",
  "arrow-schema",

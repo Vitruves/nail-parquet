@@ -1,11 +1,17 @@
 [package]
 name = "nail-parquet"
-version = "1.6.5"
+version = "1.6.6"
 edition = "2021"
 authors = ["Johan HG Natter"]
-description = "A comprehensive cli data utility with parquet, xlsx and csv support"
+description = "Lightning-fast CLI for data analysis: explore, filter, transform Parquet/CSV/Excel files with SQL-powered operations"
 license = "MIT"
 repository = "https://github.com/Vitruves/nail-parquet"
+keywords = ["parquet", "data-analysis", "csv", "datafusion", "etl"]
+categories = ["command-line-utilities", "database"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "color"] }
