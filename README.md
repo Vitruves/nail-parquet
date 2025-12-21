@@ -66,6 +66,12 @@ sudo cp target/release/nail /usr/local/bin/
 nail --help
 ```
 
+or using `nix`:
+```bash
+nix shell nixpkgs#nail-parquet
+```
+
+
 ## Global Options
 
 All commands support these global flags:
