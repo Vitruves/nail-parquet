@@ -44,7 +44,7 @@ pub struct MetadataArgs {
 
 pub async fn execute(args: MetadataArgs) -> NailResult<()> {
     // Check if input file is a parquet file
-    if !args.common.input.extension().map_or(false, |ext| ext == "parquet") {
+    if !args.common.input.extension().is_some_and(|ext| ext == "parquet") {
         return Err(NailError::UnsupportedFormat(
             "Metadata command only supports Parquet files".to_string()
         ));
@@ -482,10 +482,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             schema: false,
             row_groups: false,
             column_chunks: false,
@@ -508,10 +508,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             schema: false,
             row_groups: false,
             column_chunks: false,
@@ -534,10 +534,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             schema: false,
             row_groups: false,
             column_chunks: false,

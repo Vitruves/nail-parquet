@@ -3,7 +3,7 @@ use datafusion::prelude::*;
 use datafusion::common::DFSchemaRef;
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::{read_data, read_data_with_opts};
 use crate::utils::output::OutputHandler;
 use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
@@ -23,7 +23,7 @@ pub struct AppendArgs {
 pub async fn execute(args: AppendArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading base table from: {}", args.common.input.display()));
 	
-	let mut base_df = read_data(&args.common.input).await?;
+	let mut base_df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let base_schema: DFSchemaRef = base_df.schema().clone().into();
 	
 	let append_files: Vec<&str> = args.files.split(',').map(|s| s.trim()).collect();
@@ -266,7 +266,7 @@ mod tests {
 				format: None,
 				verbose: false,
 				jobs: None,
-				random: None,
+                table: false,				random: None,				batch_size: None,
 			},
 			files: append_path.to_string_lossy().to_string(),
 			ignore_schema: false,
@@ -313,7 +313,7 @@ mod tests {
 				format: None,
 				verbose: false,
 				jobs: None,
-				random: None,
+                table: false,				random: None,				batch_size: None,
 			},
 			files: append_path.to_string_lossy().to_string(),
 			ignore_schema: false,
@@ -331,7 +331,7 @@ mod tests {
 				format: None,
 				verbose: false,
 				jobs: None,
-				random: None,
+                table: false,				random: None,				batch_size: None,
 			},
 			files: append_path.to_string_lossy().to_string(),
 			ignore_schema: true,

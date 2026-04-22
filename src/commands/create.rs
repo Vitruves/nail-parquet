@@ -1,5 +1,5 @@
 use clap::Args;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
@@ -31,7 +31,7 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
     let ctx = crate::utils::create_context_with_jobs(args.common.jobs).await?;
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     ctx.register_table("t", df.clone().into_view())?;
     
     let mut result_df = df;
@@ -159,10 +159,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("doubled=value*2".to_string()),
             row_filter: None,
         };
@@ -188,10 +188,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("high_value=value>300".to_string()),
             row_filter: None,
         };
@@ -216,10 +216,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("doubled=value*2,id_plus_one=id+1".to_string()),
             row_filter: None,
         };
@@ -246,10 +246,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("doubled=value*2".to_string()),
             row_filter: Some("id>2".to_string()),
         };
@@ -272,10 +272,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("id=value*2".to_string()), // 'id' already exists
             row_filter: None,
         };
@@ -294,10 +294,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("invalid_spec".to_string()), // Missing '='
             row_filter: None,
         };
@@ -316,10 +316,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("test=nonexistent_column*2".to_string()),
             row_filter: None,
         };
@@ -338,10 +338,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("doubled=value*2".to_string()),
             row_filter: Some("nonexistent_column>5".to_string()),
         };

@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::parquet_utils::{get_parquet_row_count_fast, can_use_fast_metadata};
 use crate::cli::CommonArgs;
@@ -36,7 +36,7 @@ async fn execute_parquet_optimized(args: TailArgs) -> NailResult<()> {
 	
 	if total_rows <= args.number {
 		// Read all data if we need all rows anyway
-		let df = read_data(&args.common.input).await?;
+		let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 		let output_handler = OutputHandler::new(&args.common);
 		output_handler.handle_output(&df, "tail").await?;
 	} else {
@@ -58,7 +58,7 @@ async fn execute_parquet_optimized(args: TailArgs) -> NailResult<()> {
 }
 
 async fn execute_fallback(args: TailArgs) -> NailResult<()> {
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let total_rows = df.clone().count().await.map_err(crate::error::NailError::DataFusion)?;
 	
 	let output_handler = OutputHandler::new(&args.common);

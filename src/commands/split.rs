@@ -2,7 +2,7 @@ use clap::Args;
 use std::path::PathBuf;
 use std::collections::HashMap;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, write_data};
+use crate::utils::io::{read_data_with_opts, write_data};
 use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
 
@@ -36,8 +36,8 @@ pub async fn execute(args: SplitArgs) -> NailResult<()> {
 		args.common.log_if_verbose(&format!("Created output directory: {}", args.output_dir.display()));
 	}
 	
-	let df = read_data(&args.common.input).await?;
-	let total_rows = df.clone().count().await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	let total_rows = crate::utils::parquet_utils::row_count_fast_or_scan(&args.common.input, &df).await?;
 	
 	let ratios = parse_ratios(&args.ratio)?;
 	let file_format = determine_output_format(&args.common.format, &args.common.input);
@@ -74,7 +74,7 @@ pub async fn execute(args: SplitArgs) -> NailResult<()> {
 	} else {
 		args.common.log_if_verbose(&format!("Splitting {} rows into {} parts with ratios: {:?}", 
 			total_rows, ratios.len(), ratios));
-		random_split(&df, &ratios, &output_names, args.common.random, &file_format, args.common.verbose, args.common.jobs).await?;
+		random_split(&df, &ratios, &output_names, args.common.random, &file_format, args.common.verbose, args.common.jobs, total_rows).await?;
 	}
 	
 	args.common.log_if_verbose(&format!("Split complete: {} files created in {}", output_names.len(), args.output_dir.display()));
@@ -170,7 +170,7 @@ async fn stratified_split(
 	
 	let mut split_dfs: Vec<Option<DataFrame>> = vec![None; ratios.len()];
 	
-	for (category, _count) in &category_counts {
+	for category in category_counts.keys() {
 		// Use parameterized queries to avoid SQL injection
 		let category_df = ctx.table(table_name).await?
 			.filter(col(&actual_col_name).eq(lit(category)))?;
@@ -230,8 +230,8 @@ async fn random_split(
 	file_format: &Option<crate::utils::FileFormat>,
 	verbose: bool,
 	jobs: Option<usize>,
+	total_rows: usize,
 ) -> NailResult<()> {
-	let total_rows = df.clone().count().await?;
 	
 	let shuffled_df = if let Some(s) = seed {
 		shuffle_dataframe_with_seed(df, s, jobs).await?
@@ -292,13 +292,13 @@ fn parse_names(names_str: &str) -> NailResult<Vec<String>> {
 	Ok(names_str.split(',').map(|s| s.trim().to_string()).collect())
 }
 
-fn generate_names(prefix: &str, count: usize, _input_path: &PathBuf, output_dir: &PathBuf, extension: &str) -> Vec<PathBuf> {
+fn generate_names(prefix: &str, count: usize, _input_path: &std::path::Path, output_dir: &std::path::Path, extension: &str) -> Vec<PathBuf> {
 	(0..count)
 		.map(|i| output_dir.join(format!("{}_{}.{}", prefix, i + 1, extension)))
 		.collect()
 }
 
-fn determine_output_format(format: &Option<crate::cli::OutputFormat>, input_path: &PathBuf) -> Option<crate::utils::FileFormat> {
+fn determine_output_format(format: &Option<crate::cli::OutputFormat>, input_path: &std::path::Path) -> Option<crate::utils::FileFormat> {
 	match format {
 		Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
 		Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),

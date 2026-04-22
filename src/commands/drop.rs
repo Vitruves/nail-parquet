@@ -1,41 +1,56 @@
 use clap::Args;
 use datafusion::prelude::*;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::column::resolve_column_name;
-use crate::commands::select::{select_columns_by_pattern, parse_row_specification};
+use crate::commands::select::{select_columns_by_pattern, parse_row_specification, ColumnTypeFilter, filter_columns_by_type, all_columns_of_type};
 use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
 pub struct DropArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
+
 	#[arg(short, long, help = "Column names or regex patterns to drop (comma-separated)")]
 	pub columns: Option<String>,
-	
+
 	#[arg(short, long, help = "Row numbers/ranges to drop (e.g., 1,3,5-10) OR column conditions (e.g., 'name=John', 'age>25', 'status!=active,score<=50'). Without -o/--output, acts as dry run showing remaining records")]
 	pub rows: Option<String>,
+
+	#[arg(short = 't', long = "type", value_enum,
+		help = "Drop columns by data type. If combined with --columns, intersects (pattern AND type).")]
+	pub type_filter: Option<ColumnTypeFilter>,
 }
 
 pub async fn execute(args: DropArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let mut result_df = df;
 	
-	if let Some(col_spec) = &args.columns {
-		let schema = result_df.schema();
-		let columns_to_drop = select_columns_by_pattern(schema.clone().into(), col_spec)?;
-		
+	if args.columns.is_some() || args.type_filter.is_some() {
+		let schema: datafusion::common::DFSchemaRef = result_df.schema().clone().into();
+
+		let mut columns_to_drop = if let Some(col_spec) = &args.columns {
+			select_columns_by_pattern(schema.clone(), col_spec)?
+		} else {
+			all_columns_of_type(&schema, args.type_filter.as_ref().unwrap())
+		};
+
+		if args.columns.is_some() {
+			if let Some(type_filter) = &args.type_filter {
+				columns_to_drop = filter_columns_by_type(&schema, &columns_to_drop, type_filter);
+			}
+		}
+
 		args.common.log_if_verbose(&format!("Dropping {} columns: {:?}", columns_to_drop.len(), columns_to_drop));
-		
+
 		let remaining_columns: Vec<Expr> = result_df.schema().fields().iter()
 			.filter(|f| !columns_to_drop.contains(f.name()))
 			.map(|f| Expr::Column(datafusion::common::Column::new(None::<String>, f.name())))
 			.collect();
-		
+
 		result_df = result_df.select(remaining_columns)?;
 	}
 	
@@ -222,12 +237,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value,category".to_string()),
             rows: None,
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -253,12 +269,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("val.*,cat.*".to_string()),
             rows: None,
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -282,12 +299,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("1,3,5".to_string()),
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -310,12 +328,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("2-4".to_string()),
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -338,12 +357,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             rows: Some("1,5".to_string()),
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -365,12 +385,13 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: true,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             rows: None,
+            type_filter: None,
         };
 
         let result = execute(args).await;
@@ -388,12 +409,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: None,
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -418,12 +440,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("10,20".to_string()), // Indices beyond the data
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -446,12 +469,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("name".to_string()),
             rows: None,
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -474,12 +498,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("3".to_string()),
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -500,12 +525,13 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("nonexistent_column".to_string()),
             rows: None,
+            type_filter: None,
         };
 
         let result = execute(args).await;
@@ -525,12 +551,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("".to_string()), // Empty column specification
             rows: None,
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -553,12 +580,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("".to_string()), // Empty row specification
+            type_filter: None,
         };
 
         let result = execute(args).await;
@@ -577,12 +605,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("1,10,3".to_string()), // Mix of valid and out-of-range indices
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -605,12 +634,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("name=Alice".to_string()), // Drop rows where name equals Alice
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -633,12 +663,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("category!=A".to_string()), // Drop rows where category is not A
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -661,12 +692,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("value>250".to_string()), // Drop rows where value > 250
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -689,12 +721,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("id<=2".to_string()), // Drop rows where id <= 2
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -717,12 +750,13 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("category=A,value>=300".to_string()), // Drop rows where category=A AND value>=300
+            type_filter: None,
         };
 
         execute(args).await.unwrap();
@@ -743,12 +777,13 @@ mod tests {
                 input: input_path,
                 output: None, // No output file = dry run
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("name=Alice".to_string()),
+            type_filter: None,
         };
 
         // This should not fail and should act as dry run
@@ -765,12 +800,13 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("nonexistent_column=value".to_string()),
+            type_filter: None,
         };
 
         let result = execute(args).await;
@@ -786,12 +822,13 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             rows: Some("invalid_format_without_operator".to_string()),
+            type_filter: None,
         };
 
         let result = execute(args).await;

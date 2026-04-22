@@ -1,5 +1,5 @@
 use crate::error::{NailError, NailResult};
-use crate::utils::{create_context_with_jobs, io::read_data};
+use crate::utils::{create_context_with_jobs, io::read_data_with_opts};
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use clap::Args;
@@ -49,7 +49,7 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
 
     // Read input data
     let _ctx = create_context_with_jobs(args.common.jobs).await?;
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     
     // Parse columns
     let index_cols: Vec<&str> = args.index.split(',').map(|s| s.trim()).collect();
@@ -133,7 +133,6 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
             .map(|field| field.name().as_str())
             .collect::<Vec<_>>()
             .into_iter()
-            .map(|s| s)
             .collect()
     };
 
@@ -199,7 +198,7 @@ async fn create_pivot_table(
             AggregationFunction::Min => min(col(value_col)),
             AggregationFunction::Max => max(col(value_col)),
         };
-        agg_exprs.push(agg_expr.alias(&format!("{}_{}", value_col, agg.to_string().to_lowercase())));
+        agg_exprs.push(agg_expr.alias(format!("{}_{}", value_col, agg.to_string().to_lowercase())));
     }
     
     // Perform the initial aggregation
@@ -292,9 +291,9 @@ mod tests {
                 input: PathBuf::from("data.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "category".to_string(),
             columns: "month".to_string(),
@@ -317,9 +316,9 @@ mod tests {
                 input: PathBuf::from("sales.csv"),
                 output: Some(PathBuf::from("pivot.parquet")),
                 format: Some(crate::cli::OutputFormat::Parquet),
-                random: Some(456),
+                random: Some(456),                batch_size: None,
                 jobs: Some(4),
-                verbose: true,
+                table: false,                verbose: true,
             },
             index: "region,product".to_string(),
             columns: "quarter,year".to_string(),
@@ -344,9 +343,9 @@ mod tests {
                 input: PathBuf::from("events.json"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "user_id".to_string(),
             columns: "event_type".to_string(),
@@ -369,9 +368,9 @@ mod tests {
                 input: PathBuf::from("temperature.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "location".to_string(),
             columns: "month".to_string(),
@@ -385,9 +384,9 @@ mod tests {
                 input: PathBuf::from("temperature.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "location".to_string(),
             columns: "month".to_string(),
@@ -424,9 +423,9 @@ mod tests {
                 input: PathBuf::from("test.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "category".to_string(),
             columns: "month".to_string(),
@@ -450,9 +449,9 @@ mod tests {
                 input: PathBuf::from("test.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             index: "col_a,col_b,col_c".to_string(),
             columns: "pivot_col".to_string(),

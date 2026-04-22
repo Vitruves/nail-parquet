@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::parquet_utils::{get_parquet_row_count_fast, can_use_fast_metadata};
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
@@ -21,7 +21,7 @@ pub async fn execute(args: CountArgs) -> NailResult<()> {
 		get_parquet_row_count_fast(&args.common.input).await?
 	} else {
 		args.common.log_if_verbose("Using DataFusion for counting");
-		let df = read_data(&args.common.input).await?;
+		let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 		df.clone().count().await.map_err(crate::error::NailError::DataFusion)?
 	};
 	
@@ -128,10 +128,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         // Execute and capture output by redirecting it to a file
@@ -143,10 +143,10 @@ mod tests {
                 input: args.common.input.clone(),
                 output: Some(output_path.clone()),
                 format: Some(crate::cli::OutputFormat::Json),
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         execute(args_with_output).await.unwrap();
@@ -167,10 +167,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: Some(crate::cli::OutputFormat::Json),
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         execute(args).await.unwrap();
@@ -188,10 +188,10 @@ mod tests {
                 input: input_path,
                 output: None, // No output file specified
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         // This test just ensures no error occurs with console output
@@ -208,10 +208,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: true, // Enable verbose mode
                 jobs: None,
-            },
+                table: false,            },
         };
 
         let result = execute(args).await;
@@ -229,10 +229,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: Some(crate::cli::OutputFormat::Csv),
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         execute(args).await.unwrap();
@@ -252,10 +252,10 @@ mod tests {
                 input: nonexistent_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
         };
 
         let result = execute(args).await;

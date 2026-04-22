@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::stats::select_columns_by_pattern;
 use crate::cli::CommonArgs;
@@ -57,7 +57,7 @@ pub async fn execute(args: OutliersArgs) -> NailResult<()> {
         args.method
     ));
     
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     let schema = df.schema();
     
     let target_columns = if let Some(col_spec) = &args.columns {
@@ -966,10 +966,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             method: OutlierMethod::Iqr,
             iqr_multiplier: 1.5,
@@ -991,10 +991,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             method: OutlierMethod::ZScore,
             iqr_multiplier: 1.5,
@@ -1033,10 +1033,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: None,
             method: OutlierMethod::Iqr,
             iqr_multiplier: 1.5,
@@ -1059,10 +1059,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             method: OutlierMethod::ModifiedZScore,
             iqr_multiplier: 1.5,
@@ -1084,10 +1084,10 @@ mod tests {
                 input: temp_file.path().to_path_buf(),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             columns: Some("value".to_string()),
             method: OutlierMethod::IsolationForest,
             iqr_multiplier: 1.5,

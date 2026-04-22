@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::{read_data, read_data_with_opts};
 use crate::cli::CommonArgs;
 use clap::Args;
 use datafusion::prelude::*;
@@ -131,11 +131,12 @@ pub async fn execute(args: OptimizeArgs) -> NailResult<()> {
     } else if args.no_dictionary {
         false
     } else {
-        args.dictionary || true // Default to true if neither specified
+        // Default to dictionary encoding when neither flag is set.
+        true
     };
 
     // Read the input Parquet file
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     
     let count = df.clone().count().await?;
     args.common.log_if_verbose(&format!("Input file contains {} rows", count));
@@ -370,10 +371,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 6,
             sort_by: None,
@@ -407,10 +408,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Gzip,
             compression_level: 3,
             sort_by: Some("a,b".to_string()),
@@ -450,10 +451,10 @@ mod tests {
                     input: input_path,
                     output: Some(output_path.clone()),
                     format: None,
-                    random: None,
+                    random: None,                    batch_size: None,
                     verbose: false,
                     jobs: None,
-                },
+                table: false,                },
                 compression: compression.clone(),
                 compression_level: 5,
                 sort_by: None,
@@ -479,10 +480,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: true, // Test verbose mode
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Zstd,
             compression_level: 4,
             sort_by: Some("id".to_string()),
@@ -511,10 +512,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 10, // Invalid level
             sort_by: None,
@@ -538,10 +539,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,
@@ -565,10 +566,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: Some("nonexistent_column".to_string()),
@@ -592,10 +593,10 @@ mod tests {
                 input: input_path.clone(),
                 output: None, // No output path specified
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,
@@ -623,10 +624,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,
@@ -651,10 +652,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,
@@ -679,10 +680,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,
@@ -712,10 +713,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Gzip,
             compression_level: 3,
             sort_by: Some("category,name,id".to_string()), // Multiple columns
@@ -761,10 +762,10 @@ mod tests {
                 input: file_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             compression: CompressionType::Snappy,
             compression_level: 5,
             sort_by: None,

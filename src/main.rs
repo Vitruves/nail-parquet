@@ -53,5 +53,6 @@ async fn run() -> NailResult<()> {
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
 		commands::Commands::Optimize(args) => commands::optimize::execute(args).await,
 		commands::Commands::Update(args) => commands::update::execute(args).await,
+		commands::Commands::Completions(args) => commands::completions::execute(args).await,
 	}
 }

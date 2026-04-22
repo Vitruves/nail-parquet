@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.6.6"
+version = "1.7.0"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "Lightning-fast CLI for data analysis: explore, filter, transform Parquet/CSV/Excel files with SQL-powered operations"
@@ -15,19 +15,27 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive", "color"] }
+clap_complete = "4.5"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs"] }
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json"] }
-datafusion = "42.2"
+ureq = { version = "2.9", features = ["json"] }
+datafusion = { version = "42.2", default-features = false, features = [
+    "parquet",
+    "compression",
+    "datetime_expressions",
+    "string_expressions",
+    "unicode_expressions",
+] }
 arrow = "53.1"
 arrow-schema = "53.1"
 parquet = "53.1"
 rand = "0.8"
 statrs = "0.17"
 regex = "1"
-#futures = "0.3"
+futures = "0.3"
+rayon = "1.10"
 num_cpus = "1.16"
 chrono = { version = "0.4", features = ["serde"] }
 term_size = "0.3"

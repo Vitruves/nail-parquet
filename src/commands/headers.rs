@@ -1,7 +1,7 @@
 use clap::Args;
 use regex::Regex;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use datafusion::prelude::*;
@@ -18,7 +18,7 @@ pub struct HeadersArgs {
 pub async fn execute(args: HeadersArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading schema from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 	let field_names: Vec<String> = schema.fields().iter()
 		.map(|f| f.name().clone())

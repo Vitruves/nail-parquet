@@ -30,20 +30,31 @@ const CRATE_NAME: &str = "nail-parquet";
 // Write your release notes using concat! for multiple lines:
 
 const RELEASE_NOTE: &str = concat!(
-	"Release note version 1.6.6:\n",
-	"- Added describe command:\n",
-	"  Show global file overview with enhanced metrics and beautiful colored output\n",
-	"  Displays file metadata, dimensions, column types, data quality metrics\n",
-	"  Shows duplicate estimation, data density, storage efficiency\n",
-	"  Lists column names by type (first 10 shown)\n",
-	"- Added diff command:\n",
-	"  Compare two datasets with key-based or row-based comparison\n",
-	"  Supports --keys, --changes-only, --left-only, --right-only flags\n",
-	"- Enhanced stats command:\n",
-	"  Added --percentiles for custom percentile calculations\n",
-	"  Added --numeric-only and --categorical-only filters\n",
-	"  Better separation between numeric and categorical stats\n",
-	"- Various bug fixes and improvements"
+	"Release note version 1.7.0 (major):\n",
+	"\n",
+	"[NEW] --table flag for all commands:\n",
+	"  Display output as a columnar table instead of cards\n",
+	"  Available globally via CommonArgs, works with every command\n",
+	"  Colored headers and cells, auto-sized columns, box-drawing borders\n",
+	"\n",
+	"[NEW] frequency command enhancements:\n",
+	"  Added --head <N> to show only the top N most frequent entries\n",
+	"  Added --tail <N> to show only the bottom N least frequent entries\n",
+	"  Percentage column (%) included in --table and file output\n",
+	"\n",
+	"[NEW] preview command enhancements:\n",
+	"  Added --rows <spec> to select specific row numbers or ranges (e.g., 1,3,5-10)\n",
+	"  Works with interactive mode and output formats\n",
+	"\n",
+		"[NEW] filter: OR operator via '|' separator (AND via ',', AND binds tighter)\n",
+	"[NEW] select/drop: --type <numeric|integer|float|string|boolean|temporal|binary>\n",
+	"[NEW] search: multi-value OR via '|' in --value (e.g. 'foo|bar')\n",
+	"[NEW] completions: new subcommand generates bash/zsh/fish/powershell/elvish scripts\n",
+	"\n",
+	"[FIX] Improved float formatting:\n",
+	"  Trailing zeros trimmed (40.000 -> 40.0), keeping at least one decimal\n",
+	"[FIX] Improved border visibility on dark terminal themes",
+	"Multiple optimizations and bug fixes"
 );
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -54,37 +65,22 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 	if args.verbose {
 		eprintln!("Checking for updates for {} v{}", CRATE_NAME, CURRENT_VERSION);
 	}
-	
+
 	// Check crates.io API for latest version
 	let url = format!("https://crates.io/api/v1/crates/{}", CRATE_NAME);
-	
+
 	if args.verbose {
 		eprintln!("Fetching version info from: {}", url);
 	}
-	
-	let client = reqwest::Client::new();
-	let response = client
-		.get(&url)
-		.header("User-Agent", format!("{}/{}", CRATE_NAME, CURRENT_VERSION))
-		.send()
-		.await
-		.map_err(|e| crate::error::NailError::Io(std::io::Error::new(
-			std::io::ErrorKind::Other,
+
+	let crate_info: CrateInfo = ureq::get(&url)
+		.set("User-Agent", &format!("{}/{}", CRATE_NAME, CURRENT_VERSION))
+		.call()
+		.map_err(|e| crate::error::NailError::Io(std::io::Error::other(
 			format!("Failed to fetch version info: {}", e)
-		)))?;
-	
-	if !response.status().is_success() {
-		return Err(crate::error::NailError::Io(std::io::Error::new(
-			std::io::ErrorKind::Other,
-			format!("Failed to fetch version info: HTTP {}", response.status())
-		)));
-	}
-	
-	let crate_info: CrateInfo = response
-		.json()
-		.await
-		.map_err(|e| crate::error::NailError::Io(std::io::Error::new(
-			std::io::ErrorKind::Other,
+		)))?
+		.into_json()
+		.map_err(|e| crate::error::NailError::Io(std::io::Error::other(
 			format!("Failed to parse version info: {}", e)
 		)))?;
 	
@@ -98,7 +94,7 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 	// Compare versions
 	if is_newer_version(latest_version, CURRENT_VERSION) {
 		println!("{}", "A newer version is available!".bright_green().bold());
-		println!("{} {}", "Current version:".cyan(), format!("{}", CURRENT_VERSION).yellow());
+		println!("{} {}", "Current version:".cyan(), CURRENT_VERSION.to_string().yellow());
 		println!("{}", RELEASE_NOTE.dimmed());
 		println!("{} {}", "Latest version: ".cyan(), latest_version.bright_green().bold());
 		println!();

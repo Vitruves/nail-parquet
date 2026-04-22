@@ -3,7 +3,7 @@ use datafusion::prelude::*;
 use rand::seq::SliceRandom;
 use rand::{rngs::StdRng, SeedableRng};
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use datafusion::arrow::array::{StringArray, Array};
@@ -34,20 +34,20 @@ pub enum SampleMethod {
 pub async fn execute(args: SampleArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
-	let total_rows = df.clone().count().await?;
-	
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	let total_rows = crate::utils::parquet_utils::row_count_fast_or_scan(&args.common.input, &df).await?;
+
 	if args.number >= total_rows {
 		args.common.log_if_verbose(&format!("Requested {} samples, but only {} rows available. Returning all rows.", args.number, total_rows));
 		let output_handler = OutputHandler::new(&args.common);
 		output_handler.handle_output(&df, "sample").await?;
 		return Ok(());
 	}
-	
+
 	args.common.log_if_verbose(&format!("Sampling {} rows from {} total using {:?} method", args.number, total_rows, args.method));
-	
+
 	let sampled_df = match args.method {
-		SampleMethod::Random => sample_random(&df, args.number, args.common.random, args.common.jobs).await?,
+		SampleMethod::Random => sample_random(&df, total_rows, args.number, args.common.random, args.common.jobs).await?,
 		SampleMethod::Stratified => {
 			if let Some(col) = &args.stratify_by {
 				sample_stratified(&df, args.number, col, args.common.random, args.common.jobs).await?
@@ -68,8 +68,7 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 	Ok(())
 }
 
-async fn sample_random(df: &DataFrame, n: usize, seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
-	let total_rows = df.clone().count().await?;
+async fn sample_random(df: &DataFrame, total_rows: usize, n: usize, seed: Option<u64>, jobs: Option<usize>) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;

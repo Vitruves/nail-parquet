@@ -1,7 +1,7 @@
 use clap::Args;
 use datafusion::prelude::*;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -23,7 +23,7 @@ pub struct IdArgs {
 pub async fn execute(args: IdArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	
 	let result_df = if args.create {
 		args.common.log_if_verbose(&format!("Creating ID column '{}' with prefix '{}'", args.id_col_name, args.prefix));
@@ -129,10 +129,10 @@ mod tests {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),
@@ -162,10 +162,10 @@ mod tests {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "row_".to_string(),
 			id_col_name: "row_id".to_string(),
@@ -192,10 +192,10 @@ mod tests {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "".to_string(), // Empty prefix
 			id_col_name: "row_num".to_string(),
@@ -221,10 +221,10 @@ mod tests {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: false, // Don't create ID column
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),
@@ -269,10 +269,10 @@ mod tests {
 				input: file_path,
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(), // Same name as existing column
@@ -292,10 +292,10 @@ mod tests {
 				input: input_path,
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: true,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "test_".to_string(),
 			id_col_name: "test_id".to_string(),
@@ -316,9 +316,10 @@ mod tests {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: Some(2), // Test with specific job count
+				table: false,
 			},
 			create: true,
 			prefix: "parallel_".to_string(),
@@ -363,10 +364,10 @@ mod tests {
 				input: file_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				verbose: false,
 				jobs: None,
-			},
+                table: false,			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),

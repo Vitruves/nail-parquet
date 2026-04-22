@@ -1,7 +1,7 @@
 use clap::Args;
 use datafusion::prelude::*;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::column::resolve_column_name;
 use crate::cli::CommonArgs;
@@ -11,7 +11,10 @@ pub struct FilterArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
 	
-	#[arg(short, long, help = "Column filter conditions (comma-separated).\n\
+	#[arg(short, long, help = "Column filter conditions.\n\
+		Separators (AND binds tighter than OR):\n\
+		• ',' — AND between conditions\n\
+		• '|' — OR between conditions\n\
 		Supported operators:\n\
 		• = (equals): 'status=active'\n\
 		• != (not equals): 'status!=inactive'\n\
@@ -21,8 +24,9 @@ pub struct FilterArgs {
 		• <= (less or equal): 'price<=100'\n\
 		Examples:\n\
 		• Single: 'age>25'\n\
-		• Multiple: 'age>=18,salary<50000,status=active'\n\
-		• Mixed types: 'score>80,name!=test,active=true'")]
+		• AND: 'age>=18,salary<50000,status=active'\n\
+		• OR: 'status=active|status=pending'\n\
+		• Mixed: 'age>=18,salary<50000|role=admin'  => (age>=18 AND salary<50000) OR role=admin")]
 	pub columns: Option<String>,
 	
 	#[arg(short, long, help = "Row filter type", value_enum)]
@@ -40,7 +44,7 @@ pub enum RowFilter {
 pub async fn execute(args: FilterArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let mut result_df = df;
 	
 	if let Some(col_conditions) = &args.columns {
@@ -63,22 +67,35 @@ async fn apply_column_filters(df: &DataFrame, conditions: &str, jobs: Option<usi
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
-	
+
 	let schema = df.schema().clone().into();
-	let mut filter_conditions = Vec::new();
-	
-	for condition in conditions.split(',') {
-		let condition = condition.trim();
-		let filter_expr = parse_condition_with_schema(condition, &schema).await?;
-		filter_conditions.push(filter_expr);
-	}
-	
-	let combined_filter = filter_conditions.into_iter()
-		.reduce(|acc, expr| acc.and(expr))
-		.unwrap();
-	
+	let combined_filter = parse_filter_expression(conditions, &schema).await?;
+
 	let result = ctx.table(table_name).await?.filter(combined_filter)?;
 	Ok(result)
+}
+
+/// Parse a filter expression with AND (',') and OR ('|') separators.
+/// AND binds tighter than OR, so `a=1,b=2|c=3` becomes `(a=1 AND b=2) OR c=3`.
+async fn parse_filter_expression(expression: &str, schema: &datafusion::common::DFSchemaRef) -> NailResult<Expr> {
+	let mut or_groups = Vec::new();
+	for or_group in expression.split('|') {
+		let or_group = or_group.trim();
+		if or_group.is_empty() {
+			return Err(NailError::InvalidArgument(format!("Empty OR group in: {}", expression)));
+		}
+		let mut and_exprs = Vec::new();
+		for condition in or_group.split(',') {
+			let condition = condition.trim();
+			if condition.is_empty() {
+				return Err(NailError::InvalidArgument(format!("Empty condition in: {}", expression)));
+			}
+			and_exprs.push(parse_condition_with_schema(condition, schema).await?);
+		}
+		let and_combined = and_exprs.into_iter().reduce(|acc, e| acc.and(e)).unwrap();
+		or_groups.push(and_combined);
+	}
+	Ok(or_groups.into_iter().reduce(|acc, e| acc.or(e)).unwrap())
 }
 
 async fn parse_condition_with_schema(condition: &str, schema: &datafusion::common::DFSchemaRef) -> NailResult<Expr> {

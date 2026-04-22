@@ -13,7 +13,7 @@ const BOLD: &str = "\x1b[1m";
 const DIM: &str = "\x1b[2m";
 
 const NULL_COLOR: &str = "\x1b[2;37m";   // Dim white
-const BORDER_COLOR: &str = "\x1b[2;90m"; // Dim gray
+const BORDER_COLOR: &str = "\x1b[90m"; // Gray
 
 // Bat-style field colors (cycling through different colors for variety)
 const FIELD_COLORS: &[&str] = &[
@@ -31,10 +31,11 @@ const FIELD_COLORS: &[&str] = &[
 	"\x1b[31m",   // Red
 ];
 
-pub async fn display_dataframe(
+pub async fn display_dataframe_with_mode(
 	df: &DataFrame,
 	output_path: Option<&Path>,
 	format: Option<&OutputFormat>,
+	table_mode: bool,
 ) -> NailResult<()> {
 	match output_path {
 		Some(path) => {
@@ -53,7 +54,7 @@ pub async fn display_dataframe(
 					}
 				},
 			};
-			
+
 			write_data(df, path, file_format.as_ref()).await
 		},
 		None => {
@@ -62,8 +63,9 @@ pub async fn display_dataframe(
 					display_as_json(df).await?;
 				},
 				Some(OutputFormat::Text) | None => {
-					// Check if this is a correlation matrix and display accordingly
-					if is_correlation_matrix(df) {
+					if table_mode {
+						display_as_columnar_table(df).await?;
+					} else if is_correlation_matrix(df) {
 						display_correlation_matrix(df).await?;
 					} else {
 						display_as_table(df).await?;
@@ -75,7 +77,7 @@ pub async fn display_dataframe(
 					));
 				},
 			}
-			
+
 			Ok(())
 		},
 	}
@@ -127,7 +129,7 @@ async fn display_as_table(df: &DataFrame) -> NailResult<()> {
 	
 	// Get terminal width for proper wrapping
 	let terminal_width = if let Some((w, _)) = term_size::dimensions() {
-		w.max(60).min(200)
+		w.clamp(60, 200)
 	} else {
 		120
 	};
@@ -199,12 +201,206 @@ async fn display_as_table(df: &DataFrame) -> NailResult<()> {
 	Ok(())
 }
 
+async fn display_as_columnar_table(df: &DataFrame) -> NailResult<()> {
+	let batches = df.clone().collect().await?;
+	let schema = df.schema();
+
+	if batches.is_empty() {
+		println!("{}No data to display{}", DIM, RESET);
+		return Ok(());
+	}
+
+	let fields = schema.fields();
+	let num_cols = fields.len();
+
+	// Collect all cell values as plain strings (no ANSI)
+	let mut columns_values: Vec<Vec<String>> = vec![Vec::new(); num_cols];
+	for batch in &batches {
+		for row_idx in 0..batch.num_rows() {
+			for (col_idx, field) in fields.iter().enumerate() {
+				let column = batch.column(col_idx);
+				let val = format_cell_value_plain(column, row_idx, field.data_type());
+				columns_values[col_idx].push(val);
+			}
+		}
+	}
+
+	// Calculate column widths (header name vs max cell width)
+	let mut col_widths: Vec<usize> = Vec::with_capacity(num_cols);
+	for (col_idx, field) in fields.iter().enumerate() {
+		let header_len = field.name().len();
+		let max_cell = columns_values[col_idx].iter().map(|v| v.len()).max().unwrap_or(0);
+		col_widths.push(header_len.max(max_cell).max(3)); // minimum 3 chars
+	}
+
+	// Get terminal width to potentially truncate
+	let terminal_width = if let Some((w, _)) = term_size::dimensions() {
+		w.max(60)
+	} else {
+		120
+	};
+
+	// Build the separator and header lines
+	let sep_parts: Vec<String> = col_widths.iter().map(|w| "─".repeat(w + 2)).collect();
+	let top_border = format!("{}┌{}┐{}", BORDER_COLOR, sep_parts.join("┬"), RESET);
+	let mid_border = format!("{}├{}┤{}", BORDER_COLOR, sep_parts.join("┼"), RESET);
+	let bot_border = format!("{}└{}┘{}", BORDER_COLOR, sep_parts.join("┴"), RESET);
+
+	// Header row
+	let header_cells: Vec<String> = fields.iter().enumerate().map(|(col_idx, field)| {
+		let color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+		format!(" {}{}{:<width$}{} ", BOLD, color, field.name(), RESET, width = col_widths[col_idx])
+	}).collect();
+	let header_line = format!("{}│{}{}│{}", BORDER_COLOR, RESET, header_cells.join(&format!("{}│{}", BORDER_COLOR, RESET)), BORDER_COLOR, );
+
+	// Truncate display to terminal width if needed
+	let print_line = |line: &str| {
+		let visible_len = strip_ansi_codes(line).len();
+		if visible_len > terminal_width {
+			// Simple truncation — print as-is and let the terminal handle it
+			println!("{}", line);
+		} else {
+			println!("{}", line);
+		}
+	};
+
+	print_line(&top_border);
+	print_line(&header_line);
+	print_line(&mid_border);
+
+	// Data rows
+	let total_rows = columns_values.first().map(|c| c.len()).unwrap_or(0);
+	for row_idx in 0..total_rows {
+		let row_cells: Vec<String> = (0..num_cols).map(|col_idx| {
+			let color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+			let val = &columns_values[col_idx][row_idx];
+			if val == "NULL" {
+				format!(" {}{:<width$}{} ", NULL_COLOR, val, RESET, width = col_widths[col_idx])
+			} else {
+				format!(" {}{:<width$}{} ", color, val, RESET, width = col_widths[col_idx])
+			}
+		}).collect();
+		let row_line = format!("{}│{}{}│{}", BORDER_COLOR, RESET, row_cells.join(&format!("{}│{}", BORDER_COLOR, RESET)), BORDER_COLOR);
+		print_line(&row_line);
+	}
+
+	print_line(&bot_border);
+	println!("{}Total records: {}{}{}", DIM, BOLD, total_rows, RESET);
+
+	Ok(())
+}
+
+fn format_cell_value_plain(column: &dyn Array, row_idx: usize, data_type: &DataType) -> String {
+	if column.is_null(row_idx) {
+		"NULL".to_string()
+	} else {
+		match data_type {
+			DataType::Utf8 => {
+				if let Some(array) = column.as_any().downcast_ref::<StringArray>() {
+					array.value(row_idx).to_string()
+				} else {
+					"unknown".to_string()
+				}
+			},
+			DataType::Int64 => {
+				if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
+			DataType::Float64 => {
+				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
+					let val = array.value(row_idx);
+					if val.abs() < 0.001 && val != 0.0 {
+						format!("{:.2e}", val)
+					} else {
+						format_float_trimmed(val)
+					}
+				} else {
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
+			DataType::Int32 => {
+				if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
+			DataType::UInt64 => {
+				if let Some(array) = column.as_any().downcast_ref::<UInt64Array>() {
+					array.value(row_idx).to_string()
+				} else {
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
+			DataType::Float32 => {
+				if let Some(array) = column.as_any().downcast_ref::<Float32Array>() {
+					format!("{:.2}", array.value(row_idx))
+				} else {
+					let debug_str = format!("{:?}", column.slice(row_idx, 1));
+					extract_numeric_from_debug(&debug_str)
+				}
+			},
+			DataType::Boolean => {
+				if let Some(array) = column.as_any().downcast_ref::<BooleanArray>() {
+					array.value(row_idx).to_string()
+				} else {
+					"false".to_string()
+				}
+			},
+			DataType::Date32 => {
+				if let Some(array) = column.as_any().downcast_ref::<Date32Array>() {
+					let days_since_epoch = array.value(row_idx);
+					let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
+						.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
+							.unwrap_or_default());
+					date.format("%Y-%m-%d").to_string()
+				} else {
+					"1970-01-01".to_string()
+				}
+			},
+			DataType::Date64 => {
+				if let Some(array) = column.as_any().downcast_ref::<Date64Array>() {
+					let millis_since_epoch = array.value(row_idx);
+					let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
+						.unwrap_or_else(|| {
+							chrono::DateTime::from_timestamp(0, 0)
+								.unwrap_or(chrono::DateTime::UNIX_EPOCH)
+						});
+					datetime.format("%Y-%m-%d").to_string()
+				} else {
+					"1970-01-01".to_string()
+				}
+			},
+			DataType::Timestamp(_, _) => "timestamp".to_string(),
+			_ => {
+				format!("{:?}", column.slice(row_idx, 1))
+					.lines()
+					.next()
+					.unwrap_or("unknown")
+					.trim_start_matches('[')
+					.trim_end_matches(']')
+					.trim_start_matches("\"")
+					.trim_end_matches("\"")
+					.trim()
+					.to_string()
+			},
+		}
+	}
+}
+
 fn wrap_text_with_color(text: &str, max_width: usize, field_color: &str) -> String {
 	let clean_text = strip_ansi_codes(text);
 	
 	// First, normalize the text by replacing all newlines with spaces
 	// This handles cases where the original data has embedded newlines
-	let normalized_text = clean_text.replace('\n', " ").replace('\r', " ");
+	let normalized_text = clean_text.replace(['\n', '\r'], " ");
 	
 	// Remove multiple consecutive spaces
 	let normalized_text = normalized_text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -220,7 +416,7 @@ fn wrap_text_with_color(text: &str, max_width: usize, field_color: &str) -> Stri
 	for word in normalized_text.split_whitespace() {
 		if current_line.is_empty() {
 			current_line = word.to_string();
-		} else if current_line.len() + word.len() + 1 <= max_width {
+		} else if current_line.len() + word.len() < max_width {
 			current_line.push(' ');
 			current_line.push_str(word);
 		} else {
@@ -261,6 +457,14 @@ fn strip_ansi_codes(text: &str) -> String {
 }
 
 
+
+/// Format a float with up to 3 decimals, trimming trailing zeros but keeping at least one.
+fn format_float_trimmed(val: f64) -> String {
+	let s = format!("{:.3}", val);
+	let s = s.trim_end_matches('0');
+	let s = if s.ends_with('.') { format!("{}0", s) } else { s.to_string() };
+	s
+}
 
 fn extract_numeric_from_debug(debug_str: &str) -> String {
 	// Try to extract numeric value from debug representation like "PrimitiveArray<Float64>\n[\n  4.5,\n]"
@@ -310,13 +514,13 @@ fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_t
 				}
 			},
 			DataType::Float64 => {
-                if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
-                    let val = array.value(row_idx);
-                    if val.abs() < 0.001 {
-                        format!("{:.2e}", val)
-                    } else {
-                        format!("{:.3}", val)
-                    }
+				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
+					let val = array.value(row_idx);
+					if val.abs() < 0.001 && val != 0.0 {
+						format!("{:.2e}", val)
+					} else {
+						format_float_trimmed(val)
+					}
 				} else {
 					// Fallback for when the actual type doesn't match the schema type
 					let debug_str = format!("{:?}", column.slice(row_idx, 1));
@@ -360,7 +564,7 @@ fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_t
 				// Convert days since epoch to a readable date
 				let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
 					.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-						.unwrap_or_else(|| chrono::NaiveDate::default()));
+						.unwrap_or_default());
 				date.format("%Y-%m-%d").to_string()
 			},
 			DataType::Date64 => {
@@ -369,7 +573,7 @@ fn format_cell_value_with_field_color(column: &dyn Array, row_idx: usize, data_t
 				let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
 					.unwrap_or_else(|| {
 						chrono::DateTime::from_timestamp(0, 0)
-							.unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+							.unwrap_or(chrono::DateTime::UNIX_EPOCH)
 					});
 				datetime.format("%Y-%m-%d").to_string()
 			},
@@ -467,7 +671,7 @@ fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -
 					let days_since_epoch = array.value(row_idx);
 					let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
 						.unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-							.unwrap_or_else(|| chrono::NaiveDate::default()));
+							.unwrap_or_default());
 					format!("\"{}\"", date.format("%Y-%m-%d"))
 				} else {
 					"\"1970-01-01\"".to_string()
@@ -479,7 +683,7 @@ fn format_json_value(column: &dyn Array, row_idx: usize, data_type: &DataType) -
 					let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
 						.unwrap_or_else(|| {
 							chrono::DateTime::from_timestamp(0, 0)
-								.unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+								.unwrap_or(chrono::DateTime::UNIX_EPOCH)
 						});
 					format!("\"{}\"", datetime.format("%Y-%m-%d"))
 				} else {

@@ -1,7 +1,7 @@
 use clap::Args;
 use datafusion::prelude::*;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -17,7 +17,7 @@ pub struct RenameArgs {
 pub async fn execute(args: RenameArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     let mut result_df = df;
 
     // Parse rename specifications
@@ -104,9 +104,9 @@ mod tests {
                 input: PathBuf::from("test.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             columns: "old_name=new_name,col1=col2".to_string(),
         };
@@ -123,9 +123,9 @@ mod tests {
                 input: PathBuf::from("data.csv"),
                 output: Some(PathBuf::from("output.parquet")),
                 format: Some(crate::cli::OutputFormat::Parquet),
-                random: Some(42),
+                random: Some(42),                batch_size: None,
                 jobs: Some(4),
-                verbose: true,
+                table: false,                verbose: true,
             },
             columns: "firstName=first_name".to_string(),
         };
@@ -145,9 +145,9 @@ mod tests {
                 input: PathBuf::from("input.json"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             columns: "col_a=column_a,col_b=column_b,col_c=column_c".to_string(),
         };
@@ -167,9 +167,9 @@ mod tests {
                 input: PathBuf::from("test.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             columns: "old=new".to_string(),
         };

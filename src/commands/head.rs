@@ -1,7 +1,7 @@
 use clap::Args;
 
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -17,7 +17,7 @@ pub struct HeadArgs {
 pub async fn execute(args: HeadArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let limited_df = df.limit(0, Some(args.number))?;
 	
 	args.common.log_if_verbose(&format!("Displaying first {} rows", args.number));

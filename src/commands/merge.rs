@@ -2,7 +2,7 @@ use clap::Args;
 use datafusion::prelude::*;
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::{read_data, read_data_with_opts};
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -31,7 +31,7 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading left table from: {}", args.common.input.display()));
 	args.common.log_if_verbose(&format!("Reading right table from: {}", args.right.display()));
 	
-	let left_df = read_data(&args.common.input).await?;
+	let left_df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let right_df = read_data(&args.right).await?;
 	
 	let join_type = if args.left_join {
@@ -158,9 +158,9 @@ mod tests {
 				input: PathBuf::from("left.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			right: PathBuf::from("right.parquet"),
 			left_join: false,
@@ -183,9 +183,9 @@ mod tests {
 				input: PathBuf::from("table1.csv"),
 				output: Some(PathBuf::from("merged.parquet")),
 				format: Some(crate::cli::OutputFormat::Parquet),
-				random: Some(123),
+				random: Some(123),				batch_size: None,
 				jobs: Some(8),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 			right: PathBuf::from("table2.csv"),
 			left_join: true,
@@ -210,9 +210,9 @@ mod tests {
 				input: PathBuf::from("data.json"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			right: PathBuf::from("lookup.json"),
 			left_join: false,
@@ -266,9 +266,9 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			right: PathBuf::from("right.parquet"),
 			left_join: true,

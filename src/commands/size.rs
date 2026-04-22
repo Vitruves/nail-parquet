@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use datafusion::prelude::*;
@@ -23,10 +23,10 @@ pub struct SizeArgs {
 pub async fn execute(args: SizeArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Analyzing size of: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 	
-	let row_count = df.clone().count().await?;
+	let row_count = crate::utils::parquet_utils::row_count_fast_or_scan(&args.common.input, &df).await?;
 	let col_count = schema.fields().len();
 	
 	// For memory usage calculation, we'll use an approximation based on schema and row count

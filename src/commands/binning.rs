@@ -1,5 +1,5 @@
 use crate::error::{NailError, NailResult};
-use crate::utils::{create_context_with_jobs, io::read_data};
+use crate::utils::{create_context_with_jobs, io::read_data_with_opts};
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use clap::Args;
@@ -58,7 +58,7 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
 
     // Read input data
     let _ctx = create_context_with_jobs(args.common.jobs).await?;
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     
     // Parse columns to bin
     let columns: Vec<&str> = args.columns.split(',').map(|s| s.trim()).collect();
@@ -96,18 +96,13 @@ pub async fn execute(args: BinningArgs) -> NailResult<()> {
     let (bin_edges, n_bins) = parse_bins(&args.bins, &args.method)?;
     
     // Parse labels if provided
-    let labels = if let Some(labels_str) = &args.labels {
-        Some(labels_str.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>())
-    } else {
-        None
-    };
+    let labels = args.labels.as_ref().map(|labels_str| labels_str.split(',').map(|s| s.trim().to_string()).collect::<Vec<_>>());
 
     // Validate labels count if provided
     if let Some(ref label_vec) = labels {
-        let expected_labels = if bin_edges.is_some() {
-            bin_edges.as_ref().unwrap().len() - 1
-        } else {
-            n_bins.unwrap_or(10)
+        let expected_labels = match &bin_edges {
+            Some(edges) => edges.len() - 1,
+            None => n_bins.unwrap_or(10),
         };
         if label_vec.len() != expected_labels {
             return Err(NailError::InvalidArgument(
@@ -501,7 +496,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: "value".to_string(),
             bins: "5".to_string(),
@@ -548,7 +543,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: "value".to_string(),
             bins: "0,30,60,90".to_string(),
@@ -590,7 +585,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: "category".to_string(), // This is a string column
             bins: "5".to_string(),
@@ -624,7 +619,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: "value".to_string(),
             bins: "5".to_string(), // 5 bins

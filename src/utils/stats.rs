@@ -376,22 +376,19 @@ pub async fn calculate_correlations(
         return Ok(corr_df);
     }
 
-    // Calculate number of observations once
-    let total_batches = df.clone().collect().await.map_err(NailError::DataFusion)?;
-    let n: usize = total_batches.iter().map(|b| b.num_rows()).sum();
+    // Calculate number of observations once. Use Parquet metadata where possible.
+    // We have no file path here so fall back to df.count(), which is still much
+    // cheaper than collect().await + summing rows.
+    let n = df.clone().count().await.map_err(NailError::DataFusion)?;
 
-    // Collect correlation pairs and pre-allocate
+    // Collect correlation pairs (tiny: O(k^2) for k columns)
     let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
     let total_pairs: usize = batches.iter().map(|b| b.num_rows()).sum();
-    let mut col1_vec = Vec::with_capacity(total_pairs);
-    let mut col2_vec = Vec::with_capacity(total_pairs);
-    let mut corr_vec = Vec::with_capacity(total_pairs);
-    let mut p_fisher = Vec::with_capacity(total_pairs);
-    let mut p_t = Vec::with_capacity(total_pairs);
-    let mut p_chi2 = Vec::with_capacity(total_pairs);
+    let mut col1_vec: Vec<String> = Vec::with_capacity(total_pairs);
+    let mut col2_vec: Vec<String> = Vec::with_capacity(total_pairs);
+    let mut corr_vec: Vec<f64> = Vec::with_capacity(total_pairs);
 
-
-    for batch in batches {
+    for batch in &batches {
         let schema = batch.schema();
         let col1_idx = schema.index_of("column1").unwrap();
         let col2_idx = schema.index_of("column2").unwrap();
@@ -400,25 +397,35 @@ pub async fn calculate_correlations(
         let col2_arr = batch.column(col2_idx).as_any().downcast_ref::<StringArray>().unwrap();
         let corr_arr = batch.column(corr_idx).as_any().downcast_ref::<Float64Array>().unwrap();
         for i in 0..batch.num_rows() {
-            let r = corr_arr.value(i);
             col1_vec.push(col1_arr.value(i).to_string());
             col2_vec.push(col2_arr.value(i).to_string());
-            corr_vec.push(r);
-            // Fisher Z-test
-            let z = 0.5 * ((1.0 + r) / (1.0 - r)).ln() * ((n as f64 - 3.0).sqrt());
-            let p_z = 2.0 * (1.0 - <Normal as ContinuousCDF<f64, f64>>::cdf(&Normal::new(0.0, 1.0).unwrap(), z.abs()));
-            p_fisher.push(p_z);
-            // T-test
-            let t = r * ((n as f64 - 2.0) / (1.0 - r * r)).sqrt();
-            let student = StudentsT::new(0.0, 1.0, (n - 2) as f64).unwrap();
-            let p_tval = 2.0 * (1.0 - <StudentsT as ContinuousCDF<f64, f64>>::cdf(&student, t.abs()));
-            p_t.push(p_tval);
-            // Chi-squared
-            let chi2 = t * t;
-            let chisq = ChiSquared::new(1.0).unwrap();
-            let p_chival = 1.0 - <ChiSquared as ContinuousCDF<f64, f64>>::cdf(&chisq, chi2);
-            p_chi2.push(p_chival);
+            corr_vec.push(corr_arr.value(i));
         }
+    }
+
+    // Parallelize p-value computation per-pair — purely CPU work, no data
+    // dependencies between pairs, so rayon is a big win for many columns.
+    use rayon::prelude::*;
+    let n_f = n as f64;
+    let normal = Normal::new(0.0, 1.0).unwrap();
+    let chisq = ChiSquared::new(1.0).unwrap();
+    let pvals: Vec<(f64, f64, f64)> = corr_vec.par_iter().map(|&r| {
+        let z = 0.5 * ((1.0 + r) / (1.0 - r)).ln() * (n_f - 3.0).sqrt();
+        let p_z = 2.0 * (1.0 - <Normal as ContinuousCDF<f64, f64>>::cdf(&normal, z.abs()));
+        let t = r * ((n_f - 2.0) / (1.0 - r * r)).sqrt();
+        let student = StudentsT::new(0.0, 1.0, n as f64 - 2.0).unwrap();
+        let p_t = 2.0 * (1.0 - <StudentsT as ContinuousCDF<f64, f64>>::cdf(&student, t.abs()));
+        let p_chi = 1.0 - <ChiSquared as ContinuousCDF<f64, f64>>::cdf(&chisq, t * t);
+        (p_z, p_t, p_chi)
+    }).collect();
+
+    let mut p_fisher = Vec::with_capacity(total_pairs);
+    let mut p_t = Vec::with_capacity(total_pairs);
+    let mut p_chi2 = Vec::with_capacity(total_pairs);
+    for (pf, pt, pc) in pvals {
+        p_fisher.push(pf);
+        p_t.push(pt);
+        p_chi2.push(pc);
     }
 
     // Build new RecordBatch
@@ -442,7 +449,7 @@ pub async fn calculate_correlations(
         ],
     ).map_err(NailError::Arrow)?;
 
-    Ok(ctx.read_batch(batch).map_err(NailError::DataFusion)?)
+    ctx.read_batch(batch).map_err(NailError::DataFusion)
 }
 
 async fn calculate_correlation_matrix(

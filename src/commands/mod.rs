@@ -49,6 +49,7 @@ pub mod optimize;
 
 // Utility
 pub mod update;
+pub mod completions;
 
 #[derive(Subcommand)]
 pub enum Commands {
@@ -153,4 +154,7 @@ pub enum Commands {
 	
 	#[command(about = "Check for newer versions")]
 	Update(update::UpdateArgs),
+
+	#[command(about = "Generate shell completion scripts (bash, zsh, fish, powershell, elvish)")]
+	Completions(completions::CompletionsArgs),
 }

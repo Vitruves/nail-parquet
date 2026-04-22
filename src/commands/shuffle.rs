@@ -1,7 +1,7 @@
 use clap::Args;
 use datafusion::prelude::*;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use arrow::array::Array;
@@ -15,7 +15,7 @@ pub struct ShuffleArgs {
 pub async fn execute(args: ShuffleArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	
 	if args.common.verbose {
 		let total_rows = df.clone().count().await?;
@@ -142,9 +142,9 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 
@@ -161,9 +161,9 @@ mod tests {
 				input: PathBuf::from("data.csv"),
 				output: Some(PathBuf::from("shuffled.parquet")),
 				format: Some(crate::cli::OutputFormat::Parquet),
-				random: Some(42),
+				random: Some(42),				batch_size: None,
 				jobs: Some(8),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 		};
 
@@ -181,9 +181,9 @@ mod tests {
 				input: PathBuf::from("large_dataset.json"),
 				output: None,
 				format: Some(crate::cli::OutputFormat::Json),
-				random: Some(123456),
+				random: Some(123456),				batch_size: None,
 				jobs: Some(16),
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 
@@ -200,9 +200,9 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: Some(789),
+				random: Some(789),				batch_size: None,
 				jobs: None,
-				verbose: true,
+                table: false,				verbose: true,
 			},
 		};
 
@@ -220,9 +220,9 @@ mod tests {
 				input: PathBuf::from("input.csv"),
 				output: Some(PathBuf::from("output.csv")),
 				format: Some(crate::cli::OutputFormat::Csv),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 
@@ -231,9 +231,9 @@ mod tests {
 				input: PathBuf::from("input.xlsx"),
 				output: Some(PathBuf::from("output.xlsx")),
 				format: Some(crate::cli::OutputFormat::Xlsx),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 

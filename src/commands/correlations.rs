@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use crate::utils::stats::{calculate_correlations, CorrelationType, select_columns_by_pattern};
@@ -38,7 +38,7 @@ pub struct CorrelationsArgs {
 pub async fn execute(args: CorrelationsArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
     
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     let schema = df.schema();
     
     let target_columns = if let Some(col_spec) = &args.columns {
@@ -212,7 +212,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: Some("x,y,z".to_string()),
             correlation_type: CorrelationType::Pearson,
@@ -243,7 +243,7 @@ mod tests {
                 format: None,
                 verbose: true, // Test verbose output
                 jobs: Some(2),
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None, // Use all numeric columns
             correlation_type: CorrelationType::Pearson,
@@ -274,7 +274,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None,
             correlation_type: CorrelationType::Pearson,
@@ -305,7 +305,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None,
             correlation_type: CorrelationType::Spearman,
@@ -336,7 +336,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None,
             correlation_type: CorrelationType::Kendall,
@@ -367,7 +367,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: Some("x,y,category".to_string()), // category is non-numeric
             correlation_type: CorrelationType::Pearson,
@@ -406,7 +406,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None,
             correlation_type: CorrelationType::Pearson,
@@ -438,7 +438,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: Some("x,y".to_string()), // Select specific columns
             correlation_type: CorrelationType::Pearson,
@@ -469,7 +469,7 @@ mod tests {
                 format: None,
                 verbose: false,
                 jobs: None,
-                random: None,
+                table: false,                random: None,                batch_size: None,
             },
             columns: None,
             correlation_type: CorrelationType::Pearson,

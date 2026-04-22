@@ -1,39 +1,136 @@
 use clap::Args;
+use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::*;
 use regex::Regex;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
+
+#[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq)]
+pub enum ColumnTypeFilter {
+	Numeric,
+	Integer,
+	Float,
+	String,
+	Boolean,
+	Temporal,
+	Binary,
+}
+
+impl ColumnTypeFilter {
+	pub fn matches(&self, dt: &DataType) -> bool {
+		match self {
+			ColumnTypeFilter::Numeric => matches!(
+				dt,
+				DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+					| DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+					| DataType::Float16 | DataType::Float32 | DataType::Float64
+					| DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+			),
+			ColumnTypeFilter::Integer => matches!(
+				dt,
+				DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
+					| DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
+			),
+			ColumnTypeFilter::Float => matches!(
+				dt,
+				DataType::Float16 | DataType::Float32 | DataType::Float64
+					| DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+			),
+			ColumnTypeFilter::String => matches!(dt, DataType::Utf8 | DataType::LargeUtf8),
+			ColumnTypeFilter::Boolean => matches!(dt, DataType::Boolean),
+			ColumnTypeFilter::Temporal => matches!(
+				dt,
+				DataType::Date32 | DataType::Date64
+					| DataType::Timestamp(_, _)
+					| DataType::Time32(_) | DataType::Time64(_)
+					| DataType::Duration(_) | DataType::Interval(_)
+			),
+			ColumnTypeFilter::Binary => matches!(
+				dt,
+				DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_)
+			),
+		}
+	}
+}
+
+pub fn filter_columns_by_type(
+	schema: &datafusion::common::DFSchemaRef,
+	columns: &[String],
+	type_filter: &ColumnTypeFilter,
+) -> Vec<String> {
+	columns
+		.iter()
+		.filter(|name| {
+			schema
+				.field_with_name(None, name)
+				.map(|f| type_filter.matches(f.data_type()))
+				.unwrap_or(false)
+		})
+		.cloned()
+		.collect()
+}
+
+pub fn all_columns_of_type(
+	schema: &datafusion::common::DFSchemaRef,
+	type_filter: &ColumnTypeFilter,
+) -> Vec<String> {
+	schema
+		.fields()
+		.iter()
+		.filter(|f| type_filter.matches(f.data_type()))
+		.map(|f| f.name().clone())
+		.collect()
+}
 
 #[derive(Args, Clone)]
 pub struct SelectArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
+
 	#[arg(short, long, help = "Column names or regex patterns (comma-separated)")]
 	pub columns: Option<String>,
-	
+
 	#[arg(short, long, help = "Row numbers or ranges (e.g., 1,3,5-10)")]
 	pub rows: Option<String>,
+
+	#[arg(short = 't', long = "type", value_enum,
+		help = "Filter columns by data type. If combined with --columns, intersects (pattern AND type).")]
+	pub type_filter: Option<ColumnTypeFilter>,
 }
 
 pub async fn execute(args: SelectArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let mut result_df = df;
 	
-	if let Some(col_spec) = &args.columns {
-		let schema = result_df.schema();
-		let selected_columns = select_columns_by_pattern(schema.clone().into(), col_spec)?;
-		
+	if args.columns.is_some() || args.type_filter.is_some() {
+		let schema: datafusion::common::DFSchemaRef = result_df.schema().clone().into();
+
+		let mut selected_columns = if let Some(col_spec) = &args.columns {
+			select_columns_by_pattern(schema.clone(), col_spec)?
+		} else {
+			schema.fields().iter().map(|f| f.name().clone()).collect()
+		};
+
+		if let Some(type_filter) = &args.type_filter {
+			selected_columns = filter_columns_by_type(&schema, &selected_columns, type_filter);
+			if selected_columns.is_empty() {
+				return Err(NailError::InvalidArgument(format!(
+					"No columns of type {:?} found matching the given criteria",
+					type_filter
+				)));
+			}
+		}
+
 		args.common.log_if_verbose(&format!("Selecting {} columns: {:?}", selected_columns.len(), selected_columns));
-		
+
 		let select_exprs: Vec<Expr> = selected_columns.into_iter()
 			.map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, &name)))
 			.collect();
-		
+
 		result_df = result_df.select(select_exprs)?;
 	}
 	
@@ -170,7 +267,7 @@ pub fn parse_row_specification(spec: &str) -> NailResult<Vec<usize>> {
 	Ok(indices)
 }
 
-async fn select_rows_by_indices(df: &DataFrame, indices: &[usize], jobs: Option<usize>) -> NailResult<DataFrame> {
+pub async fn select_rows_by_indices(df: &DataFrame, indices: &[usize], jobs: Option<usize>) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	
 	let table_name = "temp_table";
@@ -211,12 +308,13 @@ mod tests {
 				input: PathBuf::from("data.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: None,
 			rows: None,
+			type_filter: None,
 		};
 
 		assert_eq!(args.columns, None);
@@ -231,12 +329,13 @@ mod tests {
 				input: PathBuf::from("sales.csv"),
 				output: Some(PathBuf::from("filtered.json")),
 				format: Some(crate::cli::OutputFormat::Json),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: Some(4),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 			columns: Some("name,age,email".to_string()),
 			rows: None,
+			type_filter: None,
 		};
 
 		assert_eq!(args.columns, Some("name,age,email".to_string()));
@@ -252,12 +351,13 @@ mod tests {
 				input: PathBuf::from("logs.parquet"),
 				output: None,
 				format: None,
-				random: Some(42),
+				random: Some(42),				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: None,
 			rows: Some("1,3,5-10".to_string()),
+			type_filter: None,
 		};
 
 		assert_eq!(args.columns, None);
@@ -273,12 +373,13 @@ mod tests {
 				input: PathBuf::from("dataset.xlsx"),
 				output: Some(PathBuf::from("subset.csv")),
 				format: Some(crate::cli::OutputFormat::Csv),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: Some(8),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 			columns: Some("id,name,status".to_string()),
 			rows: Some("1-100,200-300".to_string()),
+			type_filter: None,
 		};
 
 		assert_eq!(args.columns, Some("id,name,status".to_string()));
@@ -294,12 +395,13 @@ mod tests {
 				input: PathBuf::from("metrics.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: Some("^date.*,.*_count$,name".to_string()),
 			rows: None,
+			type_filter: None,
 		};
 
 		assert_eq!(args.columns, Some("^date.*,.*_count$,name".to_string()));
@@ -313,12 +415,13 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: Some("col1,col2".to_string()),
 			rows: Some("1,2,3".to_string()),
+			type_filter: None,
 		};
 
 		let cloned = args.clone();
@@ -395,12 +498,13 @@ mod tests {
 				input: PathBuf::from("input.csv"),
 				output: Some(PathBuf::from("output.txt")),
 				format: Some(crate::cli::OutputFormat::Text),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: Some("col1".to_string()),
 			rows: None,
+			type_filter: None,
 		};
 
 		let args_xlsx = SelectArgs {
@@ -408,12 +512,13 @@ mod tests {
 				input: PathBuf::from("input.parquet"),
 				output: Some(PathBuf::from("output.xlsx")),
 				format: Some(crate::cli::OutputFormat::Xlsx),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			columns: None,
 			rows: Some("1-10".to_string()),
+			type_filter: None,
 		};
 
 		assert!(matches!(args_text.common.format, Some(crate::cli::OutputFormat::Text)));

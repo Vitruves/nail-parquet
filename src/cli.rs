@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nail")]
 #[command(about = "A fast parquet utility written in Rust")]
-#[command(version = "1.6.5")]
+#[command(version = "1.7.0")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()
@@ -24,7 +24,7 @@ pub struct Cli {
 impl Cli {
 	pub fn parse_with_width() -> Self {
 		let width = if let Some((w, _)) = term_size::dimensions() {
-			Some(w.max(80).min(200))
+			Some(w.clamp(80, 200))
 		} else {
 			Some(120)
 		};
@@ -58,6 +58,12 @@ pub struct CommonArgs {
 	
 	#[arg(short, long, help = "Number of parallel jobs")]
 	pub jobs: Option<usize>,
+
+	#[arg(long, help = "DataFusion batch size (rows per record batch)")]
+	pub batch_size: Option<usize>,
+
+	#[arg(long, help = "Display output as a columnar table instead of cards")]
+	pub table: bool,
 }
 
 impl CommonArgs {

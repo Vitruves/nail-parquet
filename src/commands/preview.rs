@@ -3,9 +3,10 @@ use rand::seq::SliceRandom;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
-use crate::utils::format::display_dataframe;
+use crate::utils::io::read_data_with_opts;
+use crate::utils::format::display_dataframe_with_mode;
 use crate::cli::CommonArgs;
+use crate::commands::select::{parse_row_specification, select_rows_by_indices};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent},
     execute,
@@ -31,71 +32,91 @@ use std::io;
 pub struct PreviewArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    
+
     #[arg(short, long, help = "Number of rows to display", default_value = "5")]
     pub number: usize,
-    
+
     #[arg(short = 'I', long, help = "Interactive mode with scrolling (use arrow keys, q to quit)")]
     pub interactive: bool,
+
+    #[arg(short, long, help = "Specific row numbers or ranges (e.g., 1,3,5-10)")]
+    pub rows: Option<String>,
 }
 
 pub async fn execute(args: PreviewArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
-    
-    let df = read_data(&args.common.input).await?;
+
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     let total_rows = df.clone().count().await?;
-    
+
+    // If specific rows are requested, handle them first
+    if let Some(row_spec) = &args.rows {
+        let row_indices = parse_row_specification(row_spec)?;
+        args.common.log_if_verbose(&format!("Selecting {} specific rows", row_indices.len()));
+
+        let result_df = select_rows_by_indices(&df, &row_indices, args.common.jobs).await?;
+
+        // If interactive mode is also requested, use it with the selected rows
+        if args.interactive {
+            let selected_total = result_df.clone().count().await?;
+            return execute_interactive(args, result_df, selected_total).await;
+        }
+
+        display_dataframe_with_mode(&result_df, args.common.output.as_deref(), args.common.format.as_ref(), args.common.table).await?;
+        return Ok(());
+    }
+
     // If interactive mode is requested, handle it separately
     if args.interactive {
         return execute_interactive(args, df, total_rows).await;
     }
-    
+
     // Non-interactive mode (original behavior)
     if total_rows <= args.number {
-        display_dataframe(&df, args.common.output.as_deref(), args.common.format.as_ref()).await?;
+        display_dataframe_with_mode(&df, args.common.output.as_deref(), args.common.format.as_ref(), args.common.table).await?;
         return Ok(());
     }
-    
+
     let mut rng = match args.common.random {
         Some(seed) => StdRng::seed_from_u64(seed),
         None => StdRng::from_entropy(),
     };
-    
+
     let mut indices: Vec<usize> = (0..total_rows).collect();
     indices.shuffle(&mut rng);
     indices.truncate(args.number);
     indices.sort();
-    
+
     args.common.log_if_verbose(&format!("Randomly sampling {} rows from {} total rows", args.number, total_rows));
-    
+
     let ctx = crate::utils::create_context_with_jobs(args.common.jobs).await?;
     let table_name = "temp_table";
     ctx.register_table(table_name, df.clone().into_view())?;
-    
+
     let indices_str = indices.iter()
         .map(|&i| (i + 1).to_string())
         .collect::<Vec<_>>()
         .join(",");
-    
+
     // Get the original column names and quote them to preserve case
     let original_columns: Vec<String> = df.schema().fields().iter()
         .map(|f| format!("\"{}\"", f.name()))
         .collect();
-    
+
     let sql = format!(
         "SELECT {} FROM (SELECT {}, ROW_NUMBER() OVER() as rn FROM {}) WHERE rn IN ({})",
         original_columns.join(", "),
         original_columns.join(", "),
-        table_name, 
+        table_name,
         indices_str
     );
-    
+
     args.common.log_if_verbose(&format!("Executing SQL: {}", sql));
-    
+
     let result = ctx.sql(&sql).await?;
-    
-    display_dataframe(&result, args.common.output.as_deref(), args.common.format.as_ref()).await?;
-    
+
+    display_dataframe_with_mode(&result, args.common.output.as_deref(), args.common.format.as_ref(), args.common.table).await?;
+
     Ok(())
 }
 
@@ -109,7 +130,7 @@ async fn execute_interactive(args: PreviewArgs, df: DataFrame, total_rows: usize
     // Start with the first page of data
     const PAGE_SIZE: usize = 1000; // Load data in chunks of 1000 rows
     let mut current_page = 0;
-    let total_pages = (total_rows + PAGE_SIZE - 1) / PAGE_SIZE;
+    let total_pages = total_rows.div_ceil(PAGE_SIZE);
     
     // Load first page
     let first_page_df = df.clone().limit(0, Some(PAGE_SIZE.min(total_rows)))?;
@@ -127,14 +148,14 @@ async fn execute_interactive(args: PreviewArgs, df: DataFrame, total_rows: usize
     let mut row_offset = 0;
     
     // Setup terminal
-    enable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
-    execute!(io::stdout(), EnterAlternateScreen, Hide).map_err(|e| crate::error::NailError::Io(e))?;
+    enable_raw_mode().map_err(crate::error::NailError::Io)?;
+    execute!(io::stdout(), EnterAlternateScreen, Hide).map_err(crate::error::NailError::Io)?;
     
     let result = run_ratatui_viewer_paged(&df, &mut current_batches, &mut current_page, total_pages, PAGE_SIZE, total_records, &mut current_record, &mut row_offset, &args).await;
     
     // Cleanup terminal
-    execute!(io::stdout(), Show, LeaveAlternateScreen).map_err(|e| crate::error::NailError::Io(e))?;
-    disable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
+    execute!(io::stdout(), Show, LeaveAlternateScreen).map_err(crate::error::NailError::Io)?;
+    disable_raw_mode().map_err(crate::error::NailError::Io)?;
     
     result
 }
@@ -162,11 +183,11 @@ async fn run_ratatui_viewer_paged(
     _args: &PreviewArgs,
 ) -> NailResult<()> {
     let mut stdout = io::stdout();
-    enable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
-    execute!(stdout, EnterAlternateScreen, Hide).map_err(|e| crate::error::NailError::Io(e))?;
+    enable_raw_mode().map_err(crate::error::NailError::Io)?;
+    execute!(stdout, EnterAlternateScreen, Hide).map_err(crate::error::NailError::Io)?;
 
     let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).map_err(|e| crate::error::NailError::Io(e))?;
+    let mut terminal = Terminal::new(backend).map_err(crate::error::NailError::Io)?;
 
     loop {
         // Check if we need to load a new page for the current record
@@ -178,7 +199,7 @@ async fn run_ratatui_viewer_paged(
             
             if offset < total_records {
                 let page_df = df.clone().limit(offset, Some(limit))?;
-                *current_batches = page_df.collect().await.map_err(|e| crate::error::NailError::DataFusion(e))?;
+                *current_batches = page_df.collect().await.map_err(crate::error::NailError::DataFusion)?;
             }
         }
 
@@ -243,10 +264,10 @@ async fn run_ratatui_viewer_paged(
             let status_text = format!("Record {} of {} | ↑↓←→ hjkl | quit: q", *current_record + 1, total_records);
             let status = Paragraph::new(status_text).style(Style::default().fg(Color::DarkGray));
             f.render_widget(status, chunks[1]);
-        }).map_err(|e| crate::error::NailError::Io(e))?;
+        }).map_err(crate::error::NailError::Io)?;
 
         // handle keys
-        if let Event::Key(ke) = event::read().map_err(|e| crate::error::NailError::Io(e))? {
+        if let Event::Key(ke) = event::read().map_err(crate::error::NailError::Io)? {
             // Get schema for key handling
             let record_in_page = *current_record % page_size;
             let (batch_idx, _) = {
@@ -288,8 +309,8 @@ async fn run_ratatui_viewer_paged(
     }
 
     // restore terminal
-    disable_raw_mode().map_err(|e| crate::error::NailError::Io(e))?;
-    execute!(terminal.backend_mut(), Show, LeaveAlternateScreen).map_err(|e| crate::error::NailError::Io(e))?;
+    disable_raw_mode().map_err(crate::error::NailError::Io)?;
+    execute!(terminal.backend_mut(), Show, LeaveAlternateScreen).map_err(crate::error::NailError::Io)?;
     terminal.show_cursor().ok();
 
     Ok(())
@@ -345,7 +366,7 @@ fn format_cell_value_for_interactive(column: &dyn Array, row_idx: usize, data_ty
                 // Convert days since epoch to a readable date
                 let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
                     .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap_or_else(|| chrono::NaiveDate::default()));
+                        .unwrap_or_default());
                 date.format("%Y-%m-%d").to_string()
             },
             DataType::Date64 => {
@@ -354,7 +375,7 @@ fn format_cell_value_for_interactive(column: &dyn Array, row_idx: usize, data_ty
                 let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
                     .unwrap_or_else(|| {
                         chrono::DateTime::from_timestamp(0, 0)
-                            .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+                            .unwrap_or(chrono::DateTime::UNIX_EPOCH)
                     });
                 datetime.format("%Y-%m-%d").to_string()
             },

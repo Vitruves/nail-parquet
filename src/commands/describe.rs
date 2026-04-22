@@ -3,7 +3,7 @@ use datafusion::prelude::*;
 use std::collections::HashMap;
 use colored::Colorize;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::cli::CommonArgs;
 
 #[derive(Args, Clone)]
@@ -15,7 +15,7 @@ pub struct DescribeArgs {
 pub async fn execute(args: DescribeArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading file info from: {}", args.common.input.display()));
 
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 
 	// Gather file information
@@ -288,11 +288,7 @@ async fn estimate_duplicates(df: &DataFrame, total_rows: usize) -> NailResult<Du
 		total_rows
 	};
 
-	let estimated_duplicates = if total_rows > distinct_count {
-		total_rows - distinct_count
-	} else {
-		0
-	};
+	let estimated_duplicates = total_rows.saturating_sub(distinct_count);
 
 	let duplicate_percentage = if total_rows > 0 {
 		(estimated_duplicates as f64 / total_rows as f64) * 100.0
@@ -339,7 +335,7 @@ async fn calculate_null_info(df: &DataFrame) -> NailResult<NullInfo> {
 		for col_idx in 0..batch.num_columns() {
 			let col = batch.column(col_idx);
 			if let Some(int_array) = col.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>() {
-				if let Some(null_count) = int_array.value(0).try_into().ok() {
+				if let Ok(null_count) = int_array.value(0).try_into() {
 					let null_count: usize = null_count;
 					total_nulls += null_count;
 					if null_count > 0 {
@@ -375,9 +371,9 @@ mod tests {
 				input: PathBuf::from("data.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 
@@ -391,9 +387,9 @@ mod tests {
 				input: PathBuf::from("test.csv"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: Some(4),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 		};
 
@@ -408,9 +404,9 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 		};
 

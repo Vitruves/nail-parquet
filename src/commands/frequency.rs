@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::stats::select_columns_by_pattern;
 use crate::cli::CommonArgs;
@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::DataType;
 
 const RESET: &str = "\x1b[0m";
 const BOLD: &str = "\x1b[1m";
-const BORDER_COLOR: &str = "\x1b[2;90m";
+const BORDER_COLOR: &str = "\x1b[90m";
 const FIELD_COLORS: [&str; 6] = [
     "\x1b[92m", // Green
     "\x1b[93m", // Yellow
@@ -26,16 +26,22 @@ const FIELD_COLORS: [&str; 6] = [
 pub struct FrequencyArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    
+
     #[arg(short, long, help = "Comma-separated column names to analyze")]
     pub columns: String,
+
+    #[arg(long, help = "Show only the top N most frequent entries")]
+    pub head: Option<usize>,
+
+    #[arg(long, help = "Show only the bottom N least frequent entries")]
+    pub tail: Option<usize>,
 }
 
 pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
     args.common.log_if_verbose(&format!("Analyzing frequency for columns: {}", args.columns));
 
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     
     // Parse and resolve column names using the standard utility
     let schema = df.schema().clone().into();
@@ -65,10 +71,23 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
             col("frequency").sort(false, true),
         ])?;
 
-    // Calculate sum of all frequencies for percentage calculation
+    // Calculate sum of all frequencies for percentage calculation (before head/tail filtering)
     let sum_freq_df = frequency_df
         .clone()
         .aggregate(vec![], vec![datafusion::functions_aggregate::expr_fn::sum(col("frequency")).alias("total_frequency")])?;
+
+    // Apply --head or --tail limit
+    let frequency_df = if let Some(n) = args.tail {
+        // Reverse sort (ascending) to get least frequent, take N, then re-sort descending
+        frequency_df
+            .sort(vec![col("frequency").sort(true, true)])?
+            .limit(0, Some(n))?
+            .sort(vec![col("frequency").sort(false, true)])?
+    } else if let Some(n) = args.head {
+        frequency_df.limit(0, Some(n))?
+    } else {
+        frequency_df
+    };
     
     let sum_batches = sum_freq_df.collect().await?;
     let total_frequency: i64 = if !sum_batches.is_empty() && sum_batches[0].num_rows() > 0 {
@@ -85,8 +104,21 @@ pub async fn execute(args: FrequencyArgs) -> NailResult<()> {
         0
     };
 
-    // Display results
-    if args.common.output.is_some() || args.common.format.is_some() {
+    // Display results — add percentage column for table/file output
+    if args.common.output.is_some() || args.common.format.is_some() || args.common.table {
+        let frequency_df = if total_frequency > 0 {
+            frequency_df.with_column(
+                "%",
+                datafusion::prelude::round(vec![
+                    cast(col("frequency"), DataType::Float64)
+                        / lit(total_frequency as f64)
+                        * lit(100.0),
+                    lit(1),
+                ]),
+            )?
+        } else {
+            frequency_df
+        };
         let output_handler = OutputHandler::new(&args.common);
         output_handler.handle_output(&frequency_df, "frequency").await?;
     } else {
@@ -107,7 +139,7 @@ async fn display_frequency_table(df: &DataFrame, column_names: &[String], total_
 
     // Get terminal width for proper formatting
     let terminal_width = if let Some((w, _)) = term_size::dimensions() {
-        w.max(60).min(200)
+        w.clamp(60, 200)
     } else {
         120
     };
@@ -244,7 +276,7 @@ fn format_array_value(column: &dyn Array, row_idx: usize) -> String {
                     let days_since_epoch = array.value(row_idx);
                     let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
                         .unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                            .unwrap_or_else(|| chrono::NaiveDate::default()));
+                            .unwrap_or_default());
                     date.format("%Y-%m-%d").to_string()
                 } else {
                     "1970-01-01".to_string()
@@ -256,7 +288,7 @@ fn format_array_value(column: &dyn Array, row_idx: usize) -> String {
                     let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
                         .unwrap_or_else(|| {
                             chrono::DateTime::from_timestamp(0, 0)
-                                .unwrap_or_else(|| chrono::DateTime::UNIX_EPOCH)
+                                .unwrap_or(chrono::DateTime::UNIX_EPOCH)
                         });
                     datetime.format("%Y-%m-%d").to_string()
                 } else {

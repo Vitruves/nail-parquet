@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use datafusion::prelude::*;
@@ -15,7 +15,7 @@ pub struct SchemaArgs {
 pub async fn execute(args: SchemaArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading schema from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 	
 	let schema_info: Vec<SchemaField> = schema.fields().iter()

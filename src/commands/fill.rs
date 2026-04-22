@@ -2,7 +2,7 @@ use clap::Args;
 use datafusion::prelude::*;
 use datafusion::arrow::array::{Float64Array, Int64Array, Array};
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
@@ -35,7 +35,7 @@ pub enum FillMethod {
 pub async fn execute(args: FillArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	
 	let columns = if let Some(col_spec) = &args.columns {
 		let schema = df.schema();

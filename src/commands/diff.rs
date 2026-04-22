@@ -2,7 +2,7 @@ use clap::Args;
 use datafusion::prelude::*;
 use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::{read_data, read_data_with_opts};
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -31,7 +31,7 @@ pub async fn execute(args: DiffArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading left file from: {}", args.common.input.display()));
 	args.common.log_if_verbose(&format!("Reading right file from: {}", args.compare.display()));
 
-	let left_df = read_data(&args.common.input).await?;
+	let left_df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let right_df = read_data(&args.compare).await?;
 
 	// Validate schemas are compatible
@@ -201,9 +201,9 @@ mod tests {
 				input: PathBuf::from("left.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			compare: PathBuf::from("right.parquet"),
 			keys: Some("id".to_string()),
@@ -226,9 +226,9 @@ mod tests {
 				input: PathBuf::from("data1.csv"),
 				output: Some(PathBuf::from("diff_result.parquet")),
 				format: Some(crate::cli::OutputFormat::Parquet),
-				random: None,
+				random: None,				batch_size: None,
 				jobs: Some(4),
-				verbose: true,
+                table: false,				verbose: true,
 			},
 			compare: PathBuf::from("data2.csv"),
 			keys: Some("user_id,timestamp".to_string()),
@@ -249,9 +249,9 @@ mod tests {
 				input: PathBuf::from("old.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			compare: PathBuf::from("new.parquet"),
 			keys: None,
@@ -273,9 +273,9 @@ mod tests {
 				input: PathBuf::from("old.json"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			compare: PathBuf::from("new.json"),
 			keys: Some("id".to_string()),
@@ -296,9 +296,9 @@ mod tests {
 				input: PathBuf::from("test1.parquet"),
 				output: None,
 				format: None,
-				random: None,
+				random: None,				batch_size: None,
 				jobs: None,
-				verbose: false,
+                table: false,				verbose: false,
 			},
 			compare: PathBuf::from("test2.parquet"),
 			keys: Some("key_col".to_string()),

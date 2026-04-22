@@ -2,7 +2,7 @@ use clap::Args;
 use datafusion::prelude::*;
 use std::collections::HashSet;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -27,7 +27,7 @@ pub struct DedupArgs {
 pub async fn execute(args: DedupArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 	
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	
 	if !args.row_wise && !args.col_wise {
 		return Err(NailError::InvalidArgument(
@@ -178,11 +178,10 @@ async fn deduplicate_columns(df: &DataFrame, keep: &str) -> NailResult<DataFrame
 		
 		// Find columns with identical content
 		for (j, other_field_name) in field_names.iter().enumerate() {
-			if i != j && !processed_columns.contains(other_field_name) {
-				if columns_have_identical_content(&batches, field_name, other_field_name)? {
+			if i != j && !processed_columns.contains(other_field_name)
+				&& columns_have_identical_content(&batches, field_name, other_field_name)? {
 					duplicate_group.push(other_field_name.clone());
 				}
-			}
 		}
 		
 		// Choose which column to keep from the duplicate group
@@ -377,10 +376,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: None, // All columns
@@ -407,10 +406,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: Some("id,name".to_string()),
@@ -437,10 +436,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: None,
@@ -467,10 +466,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: false,
             col_wise: true,
             columns: None,
@@ -495,10 +494,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: true,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: None,
@@ -518,10 +517,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: false, // Neither mode enabled
             col_wise: false,
             columns: None,
@@ -542,10 +541,10 @@ mod tests {
                 input: input_path,
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: None,
@@ -591,10 +590,10 @@ mod tests {
                 input: file_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: None,
@@ -621,10 +620,10 @@ mod tests {
                 input: input_path,
                 output: Some(output_path.clone()),
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 verbose: false,
                 jobs: None,
-            },
+                table: false,            },
             row_wise: true,
             col_wise: false,
             columns: Some("".to_string()), // Empty column specification

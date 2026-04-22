@@ -9,38 +9,39 @@ use datafusion::prelude::*;
 use std::path::Path;
 use crate::error::{NailError, NailResult};
 
+const DEFAULT_BATCH_SIZE_LARGE: usize = 32_768;
+const DEFAULT_BATCH_SIZE_JOBS: usize = 8_192;
 
 pub async fn create_context() -> NailResult<SessionContext> {
-	let cpu_count = num_cpus::get();
-	let target_partitions = std::cmp::max(1, cpu_count);
-	
-	let config = SessionConfig::new()
-		.with_batch_size(32768)  // Increased for better throughput
-		.with_target_partitions(target_partitions)
-		.with_collect_statistics(false)  // Disable stats collection for faster reads
-		.with_parquet_pruning(true)  // Enable predicate pushdown
-		.with_repartition_joins(false)  // Disable for small operations
-		.with_repartition_aggregations(false)  // Disable for small operations
-		.with_prefer_existing_sort(true);  // Use existing sort orders
-	
-	let ctx = SessionContext::new_with_config(config);
-	
-	// Register optimizations for better performance
-	Ok(ctx)
+	create_context_with_opts(None, None).await
 }
 
 pub async fn create_context_with_jobs(jobs: Option<usize>) -> NailResult<SessionContext> {
+	create_context_with_opts(jobs, None).await
+}
+
+pub async fn create_context_with_opts(
+	jobs: Option<usize>,
+	batch_size: Option<usize>,
+) -> NailResult<SessionContext> {
 	let cpu_count = num_cpus::get();
-	let target_partitions = if let Some(j) = jobs {
-		std::cmp::max(1, std::cmp::min(j, cpu_count))
-	} else {
-		std::cmp::max(1, cpu_count / 2)
+	let target_partitions = match jobs {
+		Some(j) => std::cmp::max(1, std::cmp::min(j, cpu_count)),
+		None => std::cmp::max(1, cpu_count),
 	};
-	
+	let effective_batch = batch_size.unwrap_or(if jobs.is_some() {
+		DEFAULT_BATCH_SIZE_JOBS
+	} else {
+		DEFAULT_BATCH_SIZE_LARGE
+	});
+
 	let config = SessionConfig::new()
-		.with_batch_size(8192)
-		.with_target_partitions(target_partitions);
-	
+		.with_batch_size(effective_batch)
+		.with_target_partitions(target_partitions)
+		.with_collect_statistics(false)
+		.with_parquet_pruning(true)
+		.with_prefer_existing_sort(true);
+
 	Ok(SessionContext::new_with_config(config))
 }
 

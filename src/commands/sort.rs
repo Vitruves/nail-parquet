@@ -3,7 +3,7 @@ use datafusion::prelude::*;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::logical_expr::SortExpr;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::cli::CommonArgs;
 
@@ -109,7 +109,7 @@ impl NullHandling {
 pub async fn execute(args: SortArgs) -> NailResult<()> {
     args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
-    let df = read_data(&args.common.input).await?;
+    let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
     
     // Parse null handling
     let null_handling = NullHandling::from_str(&args.nulls)?;
@@ -420,8 +420,7 @@ fn convert_time_format(format: &str) -> NailResult<String> {
         .replace("mm", "%M")
         .replace("MM", "%M")
         .replace("ss", "%S")
-        .replace("SS", "%S")
-        .replace(":", ":");
+        .replace("SS", "%S");
     
     Ok(result)
 }
@@ -438,9 +437,9 @@ mod tests {
                 input: PathBuf::from("data.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             columns: "all".to_string(),
             strategy: None,
@@ -463,9 +462,9 @@ mod tests {
                 input: PathBuf::from("sales.csv"),
                 output: Some(PathBuf::from("sorted.parquet")),
                 format: Some(crate::cli::OutputFormat::Parquet),
-                random: None,
+                random: None,                batch_size: None,
                 jobs: Some(4),
-                verbose: true,
+                table: false,                verbose: true,
             },
             columns: "date,amount,customer".to_string(),
             strategy: Some(vec!["date".to_string(), "numeric".to_string(), "alphabetic".to_string()]),
@@ -525,9 +524,9 @@ mod tests {
                 input: PathBuf::from("test.parquet"),
                 output: None,
                 format: None,
-                random: None,
+                random: None,                batch_size: None,
                 jobs: None,
-                verbose: false,
+                table: false,                verbose: false,
             },
             columns: "col1,col2".to_string(),
             strategy: Some(vec!["numeric".to_string()]),

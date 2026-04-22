@@ -1,7 +1,7 @@
 use datafusion::prelude::DataFrame;
 use crate::error::NailResult;
 use crate::cli::{CommonArgs, OutputFormat};
-use crate::utils::{format::display_dataframe, io::write_data, FileFormat};
+use crate::utils::{format::display_dataframe_with_mode, io::write_data, FileFormat};
 
 pub struct OutputHandler<'a> {
     common_args: &'a CommonArgs,
@@ -22,7 +22,7 @@ impl<'a> OutputHandler<'a> {
                 self.common_args.log_if_verbose(&format!("Output written to: {}", output_path.display()));
             }
             None => {
-                display_dataframe(df, None, self.common_args.format.as_ref()).await?;
+                display_dataframe_with_mode(df, None, self.common_args.format.as_ref(), self.common_args.table).await?;
             }
         }
 

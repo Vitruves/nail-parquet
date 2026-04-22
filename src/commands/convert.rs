@@ -40,10 +40,10 @@ pub async fn execute(args: ConvertArgs) -> NailResult<()> {
 	}
 	
 	let df = read_data(&args.input).await?;
-	
-	let rows = df.clone().count().await?;
+
 	let cols = df.schema().fields().len();
 	if args.verbose {
+		let rows = crate::utils::parquet_utils::row_count_fast_or_scan(&args.input, &df).await?;
 		eprintln!("Processing {} rows, {} columns", rows, cols);
 	}
 	
@@ -105,7 +105,7 @@ mod tests {
 			random: None,
 			verbose: false,
 			jobs: None,
-		};
+			};
 		
 		// Execute conversion
 		let result = execute(args).await;
@@ -143,7 +143,7 @@ mod tests {
 			random: None,
 			verbose: false,
 			jobs: None,
-		};
+			};
 		
 		// Execute conversion
 		let result = execute(args).await;
@@ -206,7 +206,7 @@ mod tests {
 			random: None,
 			verbose: false,
 			jobs: None,
-		};
+			};
 		
 		// Execute conversion should fail
 		let result = execute(args).await;
@@ -230,7 +230,7 @@ mod tests {
 			random: Some(42), // Test random seed
 			verbose: false,
 			jobs: None,
-		};
+			};
 		
 		// Execute conversion
 		let result = execute(args).await;
@@ -269,7 +269,7 @@ mod tests {
 			random: None,
 			verbose: false,
 			jobs: None,
-		};
+			};
 		
 		// Execute conversion should work with empty data
 		let result = execute(args).await;

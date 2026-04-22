@@ -1,6 +1,6 @@
 use clap::Args;
 use crate::error::NailResult;
-use crate::utils::io::read_data;
+use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use crate::utils::stats::{calculate_basic_stats, calculate_exhaustive_stats, calculate_custom_stats, calculate_hypothesis_tests, select_columns_by_pattern};
 use crate::cli::CommonArgs;
@@ -36,7 +36,7 @@ pub enum StatsType {
 pub async fn execute(args: StatsArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
 
-	let df = read_data(&args.common.input).await?;
+	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 
 	// Get target columns based on pattern
@@ -119,11 +119,10 @@ fn filter_columns_by_type(
 			DataType::Utf8 | DataType::LargeUtf8
 		);
 
-		if numeric_only && is_numeric {
-			filtered.push(col.clone());
-		} else if categorical_only && is_string {
-			filtered.push(col.clone());
-		} else if !numeric_only && !categorical_only {
+		let include = (numeric_only && is_numeric)
+			|| (categorical_only && is_string)
+			|| (!numeric_only && !categorical_only);
+		if include {
 			filtered.push(col.clone());
 		}
 	}

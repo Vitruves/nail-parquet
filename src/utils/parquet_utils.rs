@@ -7,7 +7,7 @@ pub async fn get_parquet_row_count_fast(path: &Path) -> NailResult<usize> {
     use parquet::file::reader::{FileReader, SerializedFileReader};
     
     let file = File::open(path)
-        .map_err(|e| NailError::Io(e))?;
+        .map_err(NailError::Io)?;
     
     let reader = SerializedFileReader::new(file)
         .map_err(|e| NailError::InvalidArgument(format!("Failed to read Parquet metadata: {}", e)))?;
@@ -30,4 +30,23 @@ pub fn can_use_fast_metadata(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| ext.to_lowercase() == "parquet")
         .unwrap_or(false)
+}
+
+/// Cheapest-available row count for an unmodified file at `path`:
+/// uses Parquet footer if possible, otherwise falls back to a full
+/// DataFusion count on `df`.
+///
+/// Only call this with a DataFrame that represents the raw file with
+/// no filters or projections applied — otherwise the metadata count
+/// will be wrong.
+pub async fn row_count_fast_or_scan(
+    path: &Path,
+    df: &datafusion::prelude::DataFrame,
+) -> NailResult<usize> {
+    if can_use_fast_metadata(path) {
+        if let Ok(n) = get_parquet_row_count_fast(path).await {
+            return Ok(n);
+        }
+    }
+    df.clone().count().await.map_err(NailError::DataFusion)
 }
