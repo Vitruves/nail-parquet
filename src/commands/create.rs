@@ -59,23 +59,91 @@ struct FunctionAlias {
 }
 
 const FUNCTION_ALIASES: &[FunctionAlias] = &[
-	FunctionAlias { alias: "mean", target: "avg", is_aggregate: true },
-	FunctionAlias { alias: "avg", target: "avg", is_aggregate: true },
-	FunctionAlias { alias: "sum", target: "sum", is_aggregate: true },
-	FunctionAlias { alias: "min", target: "min", is_aggregate: true },
-	FunctionAlias { alias: "max", target: "max", is_aggregate: true },
-	FunctionAlias { alias: "count", target: "count", is_aggregate: true },
-	FunctionAlias { alias: "median", target: "median", is_aggregate: true },
-	FunctionAlias { alias: "std", target: "stddev_samp", is_aggregate: true },
-	FunctionAlias { alias: "stdev", target: "stddev_samp", is_aggregate: true },
-	FunctionAlias { alias: "stddev", target: "stddev_samp", is_aggregate: true },
-	FunctionAlias { alias: "stddev_samp", target: "stddev_samp", is_aggregate: true },
-	FunctionAlias { alias: "stddev_pop", target: "stddev_pop", is_aggregate: true },
-	FunctionAlias { alias: "var", target: "var_samp", is_aggregate: true },
-	FunctionAlias { alias: "variance", target: "var_samp", is_aggregate: true },
-	FunctionAlias { alias: "var_samp", target: "var_samp", is_aggregate: true },
-	FunctionAlias { alias: "var_pop", target: "var_pop", is_aggregate: true },
-	FunctionAlias { alias: "pow", target: "power", is_aggregate: false },
+	FunctionAlias {
+		alias: "mean",
+		target: "avg",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "avg",
+		target: "avg",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "sum",
+		target: "sum",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "min",
+		target: "min",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "max",
+		target: "max",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "count",
+		target: "count",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "median",
+		target: "median",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "std",
+		target: "stddev_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "stdev",
+		target: "stddev_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "stddev",
+		target: "stddev_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "stddev_samp",
+		target: "stddev_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "stddev_pop",
+		target: "stddev_pop",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "var",
+		target: "var_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "variance",
+		target: "var_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "var_samp",
+		target: "var_samp",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "var_pop",
+		target: "var_pop",
+		is_aggregate: true,
+	},
+	FunctionAlias {
+		alias: "pow",
+		target: "power",
+		is_aggregate: false,
+	},
 ];
 
 fn lookup_alias(name: &str) -> Option<&'static FunctionAlias> {
@@ -228,8 +296,8 @@ fn rewrite_expression(expr: &str) -> String {
 						while k < bytes.len() && bytes[k].is_ascii_whitespace() {
 							k += 1;
 						}
-						let has_over = k + 4 <= bytes.len()
-							&& expr[k..k + 4].eq_ignore_ascii_case("OVER");
+						let has_over =
+							k + 4 <= bytes.len() && expr[k..k + 4].eq_ignore_ascii_case("OVER");
 						if !has_over {
 							out.push_str(" OVER ()");
 						}
@@ -335,10 +403,8 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
 		for (name, expr_str) in &column_map {
 			let rewritten = rewrite_expression(expr_str);
 			if rewritten != *expr_str {
-				args.common.log_if_verbose(&format!(
-					"Rewritten '{}' -> '{}'",
-					expr_str, rewritten
-				));
+				args.common
+					.log_if_verbose(&format!("Rewritten '{}' -> '{}'", expr_str, rewritten));
 			}
 			select_list.push(format!("({}) AS \"{}\"", rewritten, name));
 		}
@@ -680,7 +746,10 @@ mod tests {
 	#[test]
 	fn test_rewrite_aggregate_autowindow() {
 		assert_eq!(rewrite_expression("mean(value)"), "avg(value) OVER ()");
-		assert_eq!(rewrite_expression("std(value)"), "stddev_samp(value) OVER ()");
+		assert_eq!(
+			rewrite_expression("std(value)"),
+			"stddev_samp(value) OVER ()"
+		);
 		assert_eq!(rewrite_expression("var(value)"), "var_samp(value) OVER ()");
 		assert_eq!(rewrite_expression("median(value)"), "median(value) OVER ()");
 		assert_eq!(
