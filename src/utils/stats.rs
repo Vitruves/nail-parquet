@@ -1,13 +1,13 @@
-use datafusion::prelude::*;
-use datafusion::common::DFSchemaRef;
-use regex::Regex;
 use crate::error::{NailError, NailResult};
-use arrow::array::{StringArray, Float64Array, ArrayRef};
-use arrow::datatypes::{Field, Schema as ArrowSchema, DataType as ArrowDataType};
+use arrow::array::{ArrayRef, Float64Array, StringArray};
+use arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 use datafusion::arrow::record_batch::RecordBatch;
-use std::sync::Arc;
-use statrs::distribution::{Normal, StudentsT, ChiSquared};
+use datafusion::common::DFSchemaRef;
+use datafusion::prelude::*;
+use regex::Regex;
 use statrs::distribution::ContinuousCDF;
+use statrs::distribution::{ChiSquared, Normal, StudentsT};
+use std::sync::Arc;
 
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq)]
 pub enum CorrelationType {
@@ -17,29 +17,37 @@ pub enum CorrelationType {
 }
 
 pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResult<Vec<String>> {
-	let patterns: Vec<&str> = pattern.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+	let patterns: Vec<&str> = pattern
+		.split(',')
+		.map(|s| s.trim())
+		.filter(|s| !s.is_empty())
+		.collect();
 	let mut selected = Vec::new();
 	let mut not_found = Vec::new();
-	
+
 	// If no valid patterns after filtering, return empty list
 	if patterns.is_empty() {
 		return Ok(Vec::new());
 	}
-	
+
 	for pattern in &patterns {
 		let mut found = false;
-		
+
 		// Strip quotes from pattern if present
-		let clean_pattern = if pattern.starts_with('"') && pattern.ends_with('"') && pattern.len() > 1 {
-			&pattern[1..pattern.len()-1]
-		} else {
-			pattern
-		};
-		
+		let clean_pattern =
+			if pattern.starts_with('"') && pattern.ends_with('"') && pattern.len() > 1 {
+				&pattern[1..pattern.len() - 1]
+			} else {
+				pattern
+			};
+
 		for field in schema.fields() {
 			let field_name = field.name();
-			
-			if clean_pattern.contains('*') || clean_pattern.contains('^') || clean_pattern.contains('$') {
+
+			if clean_pattern.contains('*')
+				|| clean_pattern.contains('^')
+				|| clean_pattern.contains('$')
+			{
 				let regex = Regex::new(clean_pattern)?;
 				if regex.is_match(field_name) {
 					selected.push(field_name.clone());
@@ -51,12 +59,15 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 				break;
 			}
 		}
-		
+
 		if !found {
 			for field in schema.fields() {
 				let field_name = field.name();
-				
-				if clean_pattern.contains('*') || clean_pattern.contains('^') || clean_pattern.contains('$') {
+
+				if clean_pattern.contains('*')
+					|| clean_pattern.contains('^')
+					|| clean_pattern.contains('$')
+				{
 					let case_insensitive_pattern = format!("(?i){}", clean_pattern);
 					if let Ok(regex) = Regex::new(&case_insensitive_pattern) {
 						if regex.is_match(field_name) {
@@ -71,33 +82,35 @@ pub fn select_columns_by_pattern(schema: DFSchemaRef, pattern: &str) -> NailResu
 				}
 			}
 		}
-		
+
 		if !found {
 			not_found.push(clean_pattern);
 		}
 	}
-	
+
 	if !not_found.is_empty() {
-		let available_columns: Vec<String> = schema.fields().iter()
-			.map(|f| f.name().clone())
-			.collect();
+		let available_columns: Vec<String> =
+			schema.fields().iter().map(|f| f.name().clone()).collect();
 		return Err(NailError::ColumnNotFound(format!(
-			"Columns not found: {:?}. Available columns: {:?}", 
+			"Columns not found: {:?}. Available columns: {:?}",
 			not_found, available_columns
 		)));
 	}
-	
+
 	let mut unique_selected = Vec::new();
 	for col in selected {
 		if !unique_selected.contains(&col) {
 			unique_selected.push(col);
 		}
 	}
-	
+
 	if unique_selected.is_empty() {
-		return Err(NailError::ColumnNotFound(format!("No columns matched pattern: {}", pattern)));
+		return Err(NailError::ColumnNotFound(format!(
+			"No columns matched pattern: {}",
+			pattern
+		)));
 	}
-	
+
 	Ok(unique_selected)
 }
 
@@ -105,18 +118,20 @@ pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailRe
 	let ctx = crate::utils::create_context().await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
-	
+
 	let mut stats_rows = Vec::new();
-	
+
 	for column in columns {
-		let field = df.schema().field_with_name(None, column)
+		let field = df
+			.schema()
+			.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
-		
+
 		match field.data_type() {
-			datafusion::arrow::datatypes::DataType::Int64 | 
-			datafusion::arrow::datatypes::DataType::Float64 | 
-			datafusion::arrow::datatypes::DataType::Int32 | 
-			datafusion::arrow::datatypes::DataType::Float32 => {
+			datafusion::arrow::datatypes::DataType::Int64
+			| datafusion::arrow::datatypes::DataType::Float64
+			| datafusion::arrow::datatypes::DataType::Int32
+			| datafusion::arrow::datatypes::DataType::Float32 => {
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
@@ -129,10 +144,10 @@ pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailRe
 					FROM {}",
 					column, column, column, column, column, column, column, table_name
 				);
-				
+
 				let stats_df = ctx.sql(&stats_sql).await?;
 				stats_rows.push(stats_df);
-			},
+			}
 			datafusion::arrow::datatypes::DataType::Utf8 => {
 				let stats_sql = format!(
 					"SELECT 
@@ -146,43 +161,50 @@ pub async fn calculate_basic_stats(df: &DataFrame, columns: &[String]) -> NailRe
 					FROM {}",
 					column, column, column, table_name
 				);
-				
+
 				let stats_df = ctx.sql(&stats_sql).await?;
 				stats_rows.push(stats_df);
-			},
+			}
 			_ => continue,
 		}
 	}
-	
+
 	if stats_rows.is_empty() {
-		return Err(NailError::Statistics("No suitable columns for statistics".to_string()));
+		return Err(NailError::Statistics(
+			"No suitable columns for statistics".to_string(),
+		));
 	}
-	
+
 	let mut iter = stats_rows.into_iter();
 	let mut combined = iter.next().unwrap();
 	for df in iter {
 		combined = combined.union(df)?;
 	}
-	
+
 	Ok(combined)
 }
 
-pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> NailResult<DataFrame> {
+pub async fn calculate_exhaustive_stats(
+	df: &DataFrame,
+	columns: &[String],
+) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context().await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
-	
+
 	let mut stats_rows = Vec::new();
-	
+
 	for column in columns {
-		let field = df.schema().field_with_name(None, column)
+		let field = df
+			.schema()
+			.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
-		
+
 		match field.data_type() {
-			datafusion::arrow::datatypes::DataType::Int64 | 
-			datafusion::arrow::datatypes::DataType::Float64 | 
-			datafusion::arrow::datatypes::DataType::Int32 | 
-			datafusion::arrow::datatypes::DataType::Float32 => {
+			datafusion::arrow::datatypes::DataType::Int64
+			| datafusion::arrow::datatypes::DataType::Float64
+			| datafusion::arrow::datatypes::DataType::Int32
+			| datafusion::arrow::datatypes::DataType::Float32 => {
 				let stats_sql = format!(
 					"SELECT 
 						'{}' as column_name,
@@ -198,13 +220,25 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 						COUNT(DISTINCT \"{}\") as num_classes,
 						(COUNT(\"{}\") - COUNT(DISTINCT \"{}\")) as duplicates
 					FROM {}",
-					column, column, column, column, column, column, column, column, 
-					column, column, column, column, column, table_name
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					column,
+					table_name
 				);
-				
+
 				let stats_df = ctx.sql(&stats_sql).await?;
 				stats_rows.push(stats_df);
-			},
+			}
 			datafusion::arrow::datatypes::DataType::Utf8 => {
 				let stats_sql = format!(
 					"SELECT 
@@ -223,24 +257,26 @@ pub async fn calculate_exhaustive_stats(df: &DataFrame, columns: &[String]) -> N
 					FROM {}",
 					column, column, column, column, column, table_name
 				);
-				
+
 				let stats_df = ctx.sql(&stats_sql).await?;
 				stats_rows.push(stats_df);
-			},
+			}
 			_ => continue,
 		}
 	}
-	
+
 	if stats_rows.is_empty() {
-		return Err(NailError::Statistics("No suitable columns for statistics".to_string()));
+		return Err(NailError::Statistics(
+			"No suitable columns for statistics".to_string(),
+		));
 	}
-	
+
 	let mut iter = stats_rows.into_iter();
 	let mut combined = iter.next().unwrap();
 	for df in iter {
 		combined = combined.union(df)?;
 	}
-	
+
 	Ok(combined)
 }
 
@@ -335,7 +371,9 @@ pub async fn calculate_custom_stats(
 	}
 
 	if stats_rows.is_empty() {
-		return Err(NailError::Statistics("No suitable columns for statistics".to_string()));
+		return Err(NailError::Statistics(
+			"No suitable columns for statistics".to_string(),
+		));
 	}
 
 	// Union all stats
@@ -348,108 +386,131 @@ pub async fn calculate_custom_stats(
 	Ok(combined)
 }
 
-pub async fn calculate_hypothesis_tests(_df: &DataFrame, _columns: &[String]) -> NailResult<DataFrame> {
-	Err(NailError::Statistics("Hypothesis tests not yet implemented".to_string()))
+pub async fn calculate_hypothesis_tests(
+	_df: &DataFrame,
+	_columns: &[String],
+) -> NailResult<DataFrame> {
+	Err(NailError::Statistics(
+		"Hypothesis tests not yet implemented".to_string(),
+	))
 }
 
 pub async fn calculate_correlations(
-    df: &DataFrame,
-    columns: &[String],
-    correlation_type: &CorrelationType,
-    matrix_format: bool,
-    include_tests: bool,
-    digits: usize,
+	df: &DataFrame,
+	columns: &[String],
+	correlation_type: &CorrelationType,
+	matrix_format: bool,
+	include_tests: bool,
+	digits: usize,
 ) -> NailResult<DataFrame> {
-    let ctx = crate::utils::create_context().await?;
-    let table_name = "temp_table";
-    ctx.register_table(table_name, df.clone().into_view())?;
+	let ctx = crate::utils::create_context().await?;
+	let table_name = "temp_table";
+	ctx.register_table(table_name, df.clone().into_view())?;
 
-    // Compute correlations
-    let corr_df = if matrix_format {
-        calculate_correlation_matrix(ctx.clone(), table_name, columns, correlation_type, digits).await?
-    } else {
-        calculate_correlation_pairs(ctx.clone(), table_name, columns, correlation_type, digits).await?
-    };
+	// Compute correlations
+	let corr_df = if matrix_format {
+		calculate_correlation_matrix(ctx.clone(), table_name, columns, correlation_type, digits)
+			.await?
+	} else {
+		calculate_correlation_pairs(ctx.clone(), table_name, columns, correlation_type, digits)
+			.await?
+	};
 
-    // If no tests or in matrix mode, return as is
-    if !include_tests || matrix_format {
-        return Ok(corr_df);
-    }
+	// If no tests or in matrix mode, return as is
+	if !include_tests || matrix_format {
+		return Ok(corr_df);
+	}
 
-    // Calculate number of observations once. Use Parquet metadata where possible.
-    // We have no file path here so fall back to df.count(), which is still much
-    // cheaper than collect().await + summing rows.
-    let n = df.clone().count().await.map_err(NailError::DataFusion)?;
+	// Calculate number of observations once. Use Parquet metadata where possible.
+	// We have no file path here so fall back to df.count(), which is still much
+	// cheaper than collect().await + summing rows.
+	let n = df.clone().count().await.map_err(NailError::DataFusion)?;
 
-    // Collect correlation pairs (tiny: O(k^2) for k columns)
-    let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
-    let total_pairs: usize = batches.iter().map(|b| b.num_rows()).sum();
-    let mut col1_vec: Vec<String> = Vec::with_capacity(total_pairs);
-    let mut col2_vec: Vec<String> = Vec::with_capacity(total_pairs);
-    let mut corr_vec: Vec<f64> = Vec::with_capacity(total_pairs);
+	// Collect correlation pairs (tiny: O(k^2) for k columns)
+	let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
+	let total_pairs: usize = batches.iter().map(|b| b.num_rows()).sum();
+	let mut col1_vec: Vec<String> = Vec::with_capacity(total_pairs);
+	let mut col2_vec: Vec<String> = Vec::with_capacity(total_pairs);
+	let mut corr_vec: Vec<f64> = Vec::with_capacity(total_pairs);
 
-    for batch in &batches {
-        let schema = batch.schema();
-        let col1_idx = schema.index_of("column1").unwrap();
-        let col2_idx = schema.index_of("column2").unwrap();
-        let corr_idx = schema.index_of("correlation").unwrap();
-        let col1_arr = batch.column(col1_idx).as_any().downcast_ref::<StringArray>().unwrap();
-        let col2_arr = batch.column(col2_idx).as_any().downcast_ref::<StringArray>().unwrap();
-        let corr_arr = batch.column(corr_idx).as_any().downcast_ref::<Float64Array>().unwrap();
-        for i in 0..batch.num_rows() {
-            col1_vec.push(col1_arr.value(i).to_string());
-            col2_vec.push(col2_arr.value(i).to_string());
-            corr_vec.push(corr_arr.value(i));
-        }
-    }
+	for batch in &batches {
+		let schema = batch.schema();
+		let col1_idx = schema.index_of("column1").unwrap();
+		let col2_idx = schema.index_of("column2").unwrap();
+		let corr_idx = schema.index_of("correlation").unwrap();
+		let col1_arr = batch
+			.column(col1_idx)
+			.as_any()
+			.downcast_ref::<StringArray>()
+			.unwrap();
+		let col2_arr = batch
+			.column(col2_idx)
+			.as_any()
+			.downcast_ref::<StringArray>()
+			.unwrap();
+		let corr_arr = batch
+			.column(corr_idx)
+			.as_any()
+			.downcast_ref::<Float64Array>()
+			.unwrap();
+		for i in 0..batch.num_rows() {
+			col1_vec.push(col1_arr.value(i).to_string());
+			col2_vec.push(col2_arr.value(i).to_string());
+			corr_vec.push(corr_arr.value(i));
+		}
+	}
 
-    // Parallelize p-value computation per-pair — purely CPU work, no data
-    // dependencies between pairs, so rayon is a big win for many columns.
-    use rayon::prelude::*;
-    let n_f = n as f64;
-    let normal = Normal::new(0.0, 1.0).unwrap();
-    let chisq = ChiSquared::new(1.0).unwrap();
-    let pvals: Vec<(f64, f64, f64)> = corr_vec.par_iter().map(|&r| {
-        let z = 0.5 * ((1.0 + r) / (1.0 - r)).ln() * (n_f - 3.0).sqrt();
-        let p_z = 2.0 * (1.0 - <Normal as ContinuousCDF<f64, f64>>::cdf(&normal, z.abs()));
-        let t = r * ((n_f - 2.0) / (1.0 - r * r)).sqrt();
-        let student = StudentsT::new(0.0, 1.0, n as f64 - 2.0).unwrap();
-        let p_t = 2.0 * (1.0 - <StudentsT as ContinuousCDF<f64, f64>>::cdf(&student, t.abs()));
-        let p_chi = 1.0 - <ChiSquared as ContinuousCDF<f64, f64>>::cdf(&chisq, t * t);
-        (p_z, p_t, p_chi)
-    }).collect();
+	// Parallelize p-value computation per-pair — purely CPU work, no data
+	// dependencies between pairs, so rayon is a big win for many columns.
+	use rayon::prelude::*;
+	let n_f = n as f64;
+	let normal = Normal::new(0.0, 1.0).unwrap();
+	let chisq = ChiSquared::new(1.0).unwrap();
+	let pvals: Vec<(f64, f64, f64)> = corr_vec
+		.par_iter()
+		.map(|&r| {
+			let z = 0.5 * ((1.0 + r) / (1.0 - r)).ln() * (n_f - 3.0).sqrt();
+			let p_z = 2.0 * (1.0 - <Normal as ContinuousCDF<f64, f64>>::cdf(&normal, z.abs()));
+			let t = r * ((n_f - 2.0) / (1.0 - r * r)).sqrt();
+			let student = StudentsT::new(0.0, 1.0, n as f64 - 2.0).unwrap();
+			let p_t = 2.0 * (1.0 - <StudentsT as ContinuousCDF<f64, f64>>::cdf(&student, t.abs()));
+			let p_chi = 1.0 - <ChiSquared as ContinuousCDF<f64, f64>>::cdf(&chisq, t * t);
+			(p_z, p_t, p_chi)
+		})
+		.collect();
 
-    let mut p_fisher = Vec::with_capacity(total_pairs);
-    let mut p_t = Vec::with_capacity(total_pairs);
-    let mut p_chi2 = Vec::with_capacity(total_pairs);
-    for (pf, pt, pc) in pvals {
-        p_fisher.push(pf);
-        p_t.push(pt);
-        p_chi2.push(pc);
-    }
+	let mut p_fisher = Vec::with_capacity(total_pairs);
+	let mut p_t = Vec::with_capacity(total_pairs);
+	let mut p_chi2 = Vec::with_capacity(total_pairs);
+	for (pf, pt, pc) in pvals {
+		p_fisher.push(pf);
+		p_t.push(pt);
+		p_chi2.push(pc);
+	}
 
-    // Build new RecordBatch
-    let arrow_schema = Arc::new(ArrowSchema::new(vec![
-        Field::new("column1", ArrowDataType::Utf8, false),
-        Field::new("column2", ArrowDataType::Utf8, false),
-        Field::new("correlation", ArrowDataType::Float64, false),
-        Field::new("p_fisher", ArrowDataType::Float64, false),
-        Field::new("p_t", ArrowDataType::Float64, false),
-        Field::new("p_chi2", ArrowDataType::Float64, false),
-    ]));
-    let batch = RecordBatch::try_new(
-        arrow_schema.clone(),
-        vec![
-            Arc::new(StringArray::from(col1_vec)) as ArrayRef,
-            Arc::new(StringArray::from(col2_vec)) as ArrayRef,
-            Arc::new(Float64Array::from(corr_vec)) as ArrayRef,
-            Arc::new(Float64Array::from(p_fisher)) as ArrayRef,
-            Arc::new(Float64Array::from(p_t)) as ArrayRef,
-            Arc::new(Float64Array::from(p_chi2)) as ArrayRef,
-        ],
-    ).map_err(NailError::Arrow)?;
+	// Build new RecordBatch
+	let arrow_schema = Arc::new(ArrowSchema::new(vec![
+		Field::new("column1", ArrowDataType::Utf8, false),
+		Field::new("column2", ArrowDataType::Utf8, false),
+		Field::new("correlation", ArrowDataType::Float64, false),
+		Field::new("p_fisher", ArrowDataType::Float64, false),
+		Field::new("p_t", ArrowDataType::Float64, false),
+		Field::new("p_chi2", ArrowDataType::Float64, false),
+	]));
+	let batch = RecordBatch::try_new(
+		arrow_schema.clone(),
+		vec![
+			Arc::new(StringArray::from(col1_vec)) as ArrayRef,
+			Arc::new(StringArray::from(col2_vec)) as ArrayRef,
+			Arc::new(Float64Array::from(corr_vec)) as ArrayRef,
+			Arc::new(Float64Array::from(p_fisher)) as ArrayRef,
+			Arc::new(Float64Array::from(p_t)) as ArrayRef,
+			Arc::new(Float64Array::from(p_chi2)) as ArrayRef,
+		],
+	)
+	.map_err(NailError::Arrow)?;
 
-    ctx.read_batch(batch).map_err(NailError::DataFusion)
+	ctx.read_batch(batch).map_err(NailError::DataFusion)
 }
 
 async fn calculate_correlation_matrix(
@@ -462,10 +523,10 @@ async fn calculate_correlation_matrix(
 	// Sort columns for deterministic order
 	let mut sorted_columns = columns.to_vec();
 	sorted_columns.sort();
-	
+
 	// First, calculate all pairwise correlations
 	let mut correlations = std::collections::HashMap::new();
-	
+
 	for (i, col1) in sorted_columns.iter().enumerate() {
 		for (j, col2) in sorted_columns.iter().enumerate() {
 			if i == j {
@@ -478,8 +539,11 @@ async fn calculate_correlation_matrix(
 				// Calculate the correlation
 				let corr_sql = match correlation_type {
 					CorrelationType::Pearson => {
-						format!("SELECT CORR(\"{}\", \"{}\") as correlation FROM {}", col1, col2, table_name)
-					},
+						format!(
+							"SELECT CORR(\"{}\", \"{}\") as correlation FROM {}",
+							col1, col2, table_name
+						)
+					}
 					CorrelationType::Spearman => {
 						format!(
 							"WITH ranked_data AS (
@@ -491,7 +555,7 @@ async fn calculate_correlation_matrix(
 							SELECT CORR(rank1, rank2) as correlation FROM ranked_data",
 							col1, col2, table_name
 						)
-					},
+					}
 					CorrelationType::Kendall => {
 						format!(
 							"WITH indexed_data AS (
@@ -523,24 +587,39 @@ async fn calculate_correlation_matrix(
 						)
 					}
 				};
-				
+
 				let corr_df = ctx.sql(&corr_sql).await?;
 				let batches = corr_df.collect().await.map_err(NailError::DataFusion)?;
 				let corr_val = if let Some(batch) = batches.first() {
 					if batch.num_rows() > 0 {
 						let column = batch.column(0);
 						// Try different numeric types
-						if let Some(float_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Float64Array>() {
+						if let Some(float_array) = column
+							.as_any()
+							.downcast_ref::<datafusion::arrow::array::Float64Array>(
+						) {
 							float_array.value(0)
-						} else if let Some(float_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Float32Array>() {
+						} else if let Some(float_array) = column
+							.as_any()
+							.downcast_ref::<datafusion::arrow::array::Float32Array>(
+						) {
 							float_array.value(0) as f64
-						} else if let Some(int_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Int64Array>() {
+						} else if let Some(int_array) = column
+							.as_any()
+							.downcast_ref::<datafusion::arrow::array::Int64Array>(
+						) {
 							int_array.value(0) as f64
-						} else if let Some(int_array) = column.as_any().downcast_ref::<datafusion::arrow::array::Int32Array>() {
+						} else if let Some(int_array) = column
+							.as_any()
+							.downcast_ref::<datafusion::arrow::array::Int32Array>(
+						) {
 							int_array.value(0) as f64
 						} else {
 							// Fallback: log the type and return 0
-							eprintln!("Warning: Unknown column type in correlation calculation: {:?}", column.data_type());
+							eprintln!(
+								"Warning: Unknown column type in correlation calculation: {:?}",
+								column.data_type()
+							);
 							0.0
 						}
 					} else {
@@ -549,39 +628,46 @@ async fn calculate_correlation_matrix(
 				} else {
 					0.0
 				};
-				
+
 				correlations.insert((col1.clone(), col2.clone()), corr_val);
 			}
 		}
 	}
-	
+
 	// Now build the matrix rows
 	let mut correlation_queries = Vec::new();
-	
+
 	for col1 in &sorted_columns {
 		let mut row_values = Vec::new();
 		row_values.push(format!("'{}' as variable", col1));
-		
+
 		for col2 in &sorted_columns {
 			let corr_val = correlations[&(col1.clone(), col2.clone())];
-			let rounded_val = (corr_val * 10_f64.powi(digits as i32)).round() / 10_f64.powi(digits as i32);
-			row_values.push(format!("{} as corr_with_{}", rounded_val, col2.replace(".", "_")));
+			let rounded_val =
+				(corr_val * 10_f64.powi(digits as i32)).round() / 10_f64.powi(digits as i32);
+			row_values.push(format!(
+				"{} as corr_with_{}",
+				rounded_val,
+				col2.replace(".", "_")
+			));
 		}
-		
+
 		let row_sql = format!("SELECT {}", row_values.join(", "));
 		correlation_queries.push(row_sql);
 	}
-	
+
 	if correlation_queries.is_empty() {
-		return Err(NailError::Statistics("No columns for correlation".to_string()));
+		return Err(NailError::Statistics(
+			"No columns for correlation".to_string(),
+		));
 	}
-	
+
 	let mut combined = ctx.sql(&correlation_queries[0]).await?;
 	for query in correlation_queries.into_iter().skip(1) {
 		let df = ctx.sql(&query).await?;
 		combined = combined.union(df)?;
 	}
-	
+
 	Ok(combined)
 }
 
@@ -593,7 +679,7 @@ async fn calculate_correlation_pairs(
 	digits: usize,
 ) -> NailResult<DataFrame> {
 	let mut pair_queries = Vec::new();
-	
+
 	for (i, col1) in columns.iter().enumerate() {
 		for col2 in columns.iter().skip(i + 1) {
 			let pair_sql = match correlation_type {
@@ -602,7 +688,7 @@ async fn calculate_correlation_pairs(
 						"SELECT '{}' as column1, '{}' as column2, ROUND(CORR(\"{}\", \"{}\"), {}) as correlation FROM {}",
 						col1, col2, col1, col2, digits, table_name
 					)
-				},
+				}
 				CorrelationType::Spearman => {
 					format!(
 						"WITH ranked_data AS (
@@ -614,7 +700,7 @@ async fn calculate_correlation_pairs(
 						SELECT '{}' as column1, '{}' as column2, ROUND(CORR(rank1, rank2), {}) as correlation FROM ranked_data",
 						col1, col2, table_name, col1, col2, digits
 					)
-				},
+				}
 				CorrelationType::Kendall => {
 					format!(
 						"WITH indexed_data AS (
@@ -649,16 +735,18 @@ async fn calculate_correlation_pairs(
 			pair_queries.push(pair_sql);
 		}
 	}
-	
+
 	if pair_queries.is_empty() {
-		return Err(NailError::Statistics("Need at least 2 columns for correlation".to_string()));
+		return Err(NailError::Statistics(
+			"Need at least 2 columns for correlation".to_string(),
+		));
 	}
-	
+
 	let mut combined = ctx.sql(&pair_queries[0]).await?;
 	for query in pair_queries.into_iter().skip(1) {
 		let df = ctx.sql(&query).await?;
 		combined = combined.union(df)?;
 	}
-	
+
 	Ok(combined)
 }

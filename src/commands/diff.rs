@@ -1,12 +1,15 @@
-use clap::Args;
-use datafusion::prelude::*;
-use std::path::PathBuf;
+use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::{read_data, read_data_with_opts};
 use crate::utils::output::OutputHandler;
-use crate::cli::CommonArgs;
+use clap::Args;
+use datafusion::prelude::*;
+use std::path::PathBuf;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail diff before.parquet -c after.parquet
+  nail diff a.csv -c b.csv -k id")]
 pub struct DiffArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
@@ -14,7 +17,11 @@ pub struct DiffArgs {
 	#[arg(short, long, help = "Second file to compare with")]
 	pub compare: PathBuf,
 
-	#[arg(short, long, help = "Columns to use as primary key for comparison (comma-separated)")]
+	#[arg(
+		short,
+		long,
+		help = "Columns to use as primary key for comparison (comma-separated)"
+	)]
 	pub keys: Option<String>,
 
 	#[arg(long, help = "Show only rows that differ")]
@@ -28,10 +35,17 @@ pub struct DiffArgs {
 }
 
 pub async fn execute(args: DiffArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Reading left file from: {}", args.common.input.display()));
-	args.common.log_if_verbose(&format!("Reading right file from: {}", args.compare.display()));
+	args.common.log_if_verbose(&format!(
+		"Reading left file from: {}",
+		args.common.input.display()
+	));
+	args.common.log_if_verbose(&format!(
+		"Reading right file from: {}",
+		args.compare.display()
+	));
 
-	let left_df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	let left_df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let right_df = read_data(&args.compare).await?;
 
 	// Validate schemas are compatible
@@ -39,23 +53,24 @@ pub async fn execute(args: DiffArgs) -> NailResult<()> {
 	let right_schema = right_df.schema();
 
 	if left_schema.fields().len() != right_schema.fields().len() {
-		return Err(NailError::InvalidArgument(
-			format!("Schema mismatch: left has {} columns, right has {} columns",
-				left_schema.fields().len(),
-				right_schema.fields().len()
-			)
-		));
+		return Err(NailError::InvalidArgument(format!(
+			"Schema mismatch: left has {} columns, right has {} columns",
+			left_schema.fields().len(),
+			right_schema.fields().len()
+		)));
 	}
 
 	let diff_df = if let Some(key_cols) = &args.keys {
 		// Key-based comparison
 		let keys: Vec<String> = key_cols.split(',').map(|s| s.trim().to_string()).collect();
-		args.common.log_if_verbose(&format!("Comparing using key columns: {:?}", keys));
+		args.common
+			.log_if_verbose(&format!("Comparing using key columns: {:?}", keys));
 
 		perform_keyed_diff(&left_df, &right_df, &keys, &args).await?
 	} else {
 		// Row-based comparison (by position)
-		args.common.log_if_verbose("Performing row-by-row comparison");
+		args.common
+			.log_if_verbose("Performing row-by-row comparison");
 		perform_row_diff(&left_df, &right_df, &args).await?
 	};
 
@@ -78,7 +93,8 @@ async fn perform_keyed_diff(
 	ctx.register_table("right_table", right_df.clone().into_view())?;
 
 	// Build key join condition
-	let join_conditions: Vec<String> = keys.iter()
+	let join_conditions: Vec<String> = keys
+		.iter()
 		.map(|k| format!("l.\"{}\" = r.\"{}\"", k, k))
 		.collect();
 	let join_clause = join_conditions.join(" AND ");
@@ -98,14 +114,23 @@ async fn perform_keyed_diff(
 			WHEN l.\"{}\" IS NULL THEN 'ADDED' \
 			WHEN r.\"{}\" IS NULL THEN 'REMOVED' \
 			ELSE 'MODIFIED' \
-		END as diff_status".replace("{}", keys.first().unwrap())
+		END as diff_status"
+			.replace("{}", keys.first().unwrap()),
 	);
 
 	// Add all non-key columns with left/right prefixes
 	for field in left_schema.fields() {
 		if !keys.contains(field.name()) {
-			select_cols.push(format!("l.\"{}\" as \"left_{}\"", field.name(), field.name()));
-			select_cols.push(format!("r.\"{}\" as \"right_{}\"", field.name(), field.name()));
+			select_cols.push(format!(
+				"l.\"{}\" as \"left_{}\"",
+				field.name(),
+				field.name()
+			));
+			select_cols.push(format!(
+				"r.\"{}\" as \"right_{}\"",
+				field.name(),
+				field.name()
+			));
 		}
 	}
 
@@ -141,13 +166,13 @@ async fn perform_row_diff(
 	ctx.register_table("left_table", left_df.clone().into_view())?;
 	ctx.register_table("right_table", right_df.clone().into_view())?;
 
-	let left_with_row = ctx.sql(
-		"SELECT ROW_NUMBER() OVER () as row_num, * FROM left_table"
-	).await?;
+	let left_with_row = ctx
+		.sql("SELECT ROW_NUMBER() OVER () as row_num, * FROM left_table")
+		.await?;
 
-	let right_with_row = ctx.sql(
-		"SELECT ROW_NUMBER() OVER () as row_num, * FROM right_table"
-	).await?;
+	let right_with_row = ctx
+		.sql("SELECT ROW_NUMBER() OVER () as row_num, * FROM right_table")
+		.await?;
 
 	ctx.deregister_table("left_table")?;
 	ctx.deregister_table("right_table")?;
@@ -163,13 +188,22 @@ async fn perform_row_diff(
 			WHEN l.row_num IS NULL THEN 'ADDED' \
 			WHEN r.row_num IS NULL THEN 'REMOVED' \
 			ELSE 'EXISTS' \
-		END as diff_status".to_string()
+		END as diff_status"
+			.to_string(),
 	);
 
 	// Add columns with left/right prefixes
 	for field in left_schema.fields() {
-		select_cols.push(format!("l.\"{}\" as \"left_{}\"", field.name(), field.name()));
-		select_cols.push(format!("r.\"{}\" as \"right_{}\"", field.name(), field.name()));
+		select_cols.push(format!(
+			"l.\"{}\" as \"left_{}\"",
+			field.name(),
+			field.name()
+		));
+		select_cols.push(format!(
+			"r.\"{}\" as \"right_{}\"",
+			field.name(),
+			field.name()
+		));
 	}
 
 	let sql = format!(
@@ -201,9 +235,11 @@ mod tests {
 				input: PathBuf::from("left.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			compare: PathBuf::from("right.parquet"),
 			keys: Some("id".to_string()),
@@ -226,9 +262,11 @@ mod tests {
 				input: PathBuf::from("data1.csv"),
 				output: Some(PathBuf::from("diff_result.parquet")),
 				format: Some(crate::cli::OutputFormat::Parquet),
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: Some(4),
-                table: false,				verbose: true,
+				table: false,
+				verbose: true,
 			},
 			compare: PathBuf::from("data2.csv"),
 			keys: Some("user_id,timestamp".to_string()),
@@ -249,9 +287,11 @@ mod tests {
 				input: PathBuf::from("old.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			compare: PathBuf::from("new.parquet"),
 			keys: None,
@@ -273,9 +313,11 @@ mod tests {
 				input: PathBuf::from("old.json"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			compare: PathBuf::from("new.json"),
 			keys: Some("id".to_string()),
@@ -296,9 +338,11 @@ mod tests {
 				input: PathBuf::from("test1.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			compare: PathBuf::from("test2.parquet"),
 			keys: Some("key_col".to_string()),

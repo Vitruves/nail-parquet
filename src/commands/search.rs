@@ -1,18 +1,24 @@
-use clap::Args;
-use datafusion::prelude::*;
-use datafusion::common::DFSchemaRef;
+use crate::cli::CommonArgs;
+use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
-use crate::cli::CommonArgs;
 use crate::utils::stats::select_columns_by_pattern;
-use crate::error::{NailError, NailResult};
+use clap::Args;
+use datafusion::common::DFSchemaRef;
+use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail search data.parquet -v \"alice\"
+  nail search logs.csv -v \"error\" -c message")]
 pub struct SearchArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
-	#[arg(long, help = "Value to search for. Use '|' to search multiple values with OR (e.g., 'foo|bar|baz').")]
+
+	#[arg(
+		long,
+		help = "Value to search for. Use '|' to search multiple values with OR (e.g., 'foo|bar|baz')."
+	)]
 	pub value: String,
 
 	#[arg(short, long, help = "Comma-separated column names to search in")]
@@ -29,9 +35,11 @@ pub struct SearchArgs {
 }
 
 pub async fn execute(args: SearchArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Searching in: {}", args.common.input.display()));
+	args.common
+		.log_if_verbose(&format!("Searching in: {}", args.common.input.display()));
 
-	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	let df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema: DFSchemaRef = df.schema().clone().into();
 
 	let search_columns = if let Some(col_spec) = &args.columns {
@@ -40,23 +48,46 @@ pub async fn execute(args: SearchArgs) -> NailResult<()> {
 		schema.fields().iter().map(|f| f.name().clone()).collect()
 	};
 
-	let search_values: Vec<String> = args.value
+	let search_values: Vec<String> = args
+		.value
 		.split('|')
 		.map(|s| s.trim().to_string())
 		.filter(|s| !s.is_empty())
 		.collect();
 
 	if search_values.is_empty() {
-		return Err(NailError::InvalidArgument("No search values provided".to_string()));
+		return Err(NailError::InvalidArgument(
+			"No search values provided".to_string(),
+		));
 	}
 
-	args.common.log_if_verbose(&format!("Searching for {:?} in {} columns: {:?}",
-		search_values, search_columns.len(), search_columns));
+	args.common.log_if_verbose(&format!(
+		"Searching for {:?} in {} columns: {:?}",
+		search_values,
+		search_columns.len(),
+		search_columns
+	));
 
 	let result_df = if args.rows {
-		search_return_row_numbers(&df, &search_values, &search_columns, args.ignore_case, args.exact, args.common.jobs).await?
+		search_return_row_numbers(
+			&df,
+			&search_values,
+			&search_columns,
+			args.ignore_case,
+			args.exact,
+			args.common.jobs,
+		)
+		.await?
 	} else {
-		search_return_matching_rows(&df, &search_values, &search_columns, args.ignore_case, args.exact, args.common.jobs).await?
+		search_return_matching_rows(
+			&df,
+			&search_values,
+			&search_columns,
+			args.ignore_case,
+			args.exact,
+			args.common.jobs,
+		)
+		.await?
 	};
 
 	let output_handler = OutputHandler::new(&args.common);
@@ -74,7 +105,7 @@ fn build_value_condition(
 	exact: bool,
 ) -> Option<Expr> {
 	use datafusion::arrow::datatypes::DataType;
-	use datafusion::logical_expr::{ExprSchemable, expr::ScalarFunction};
+	use datafusion::logical_expr::{expr::ScalarFunction, ExprSchemable};
 
 	match field_dtype {
 		DataType::Utf8 | DataType::LargeUtf8 => {
@@ -97,9 +128,16 @@ fn build_value_condition(
 				Some(col_expr.clone().like(pattern))
 			}
 		}
-		DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-		| DataType::UInt8 | DataType::UInt16 | DataType::UInt32 | DataType::UInt64
-		| DataType::Float32 | DataType::Float64 => {
+		DataType::Int8
+		| DataType::Int16
+		| DataType::Int32
+		| DataType::Int64
+		| DataType::UInt8
+		| DataType::UInt16
+		| DataType::UInt32
+		| DataType::UInt64
+		| DataType::Float32
+		| DataType::Float64 => {
 			if let Ok(num_value) = value.parse::<f64>() {
 				if exact {
 					Some(col_expr.clone().eq(lit(num_value)))
@@ -132,25 +170,38 @@ async fn search_return_matching_rows(
 	let mut conditions = Vec::new();
 
 	for column in columns {
-		let field = schema.field_with_name(None, column)
+		let field = schema
+			.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 
 		// Use qualified column name to avoid case sensitivity issues on Linux
 		let col_expr = col(format!("\"{}\"", column));
 
 		for value in search_values {
-			if let Some(cond) = build_value_condition(&col_expr, field.data_type(), &schema, value, ignore_case, exact) {
+			if let Some(cond) = build_value_condition(
+				&col_expr,
+				field.data_type(),
+				&schema,
+				value,
+				ignore_case,
+				exact,
+			) {
 				conditions.push(cond);
 			}
 		}
 	}
 
 	if conditions.is_empty() {
-		return Err(NailError::InvalidArgument("No searchable columns found".to_string()));
+		return Err(NailError::InvalidArgument(
+			"No searchable columns found".to_string(),
+		));
 	}
 
 	// Combine all conditions with OR (across columns and values)
-	let combined_filter = conditions.into_iter().reduce(|acc, expr| acc.or(expr)).unwrap();
+	let combined_filter = conditions
+		.into_iter()
+		.reduce(|acc, expr| acc.or(expr))
+		.unwrap();
 	let result = df.clone().filter(combined_filter)?;
 
 	Ok(result)
@@ -172,23 +223,36 @@ async fn search_return_row_numbers(
 	let mut conditions = Vec::new();
 
 	for column in columns {
-		let field = schema.field_with_name(None, column)
+		let field = schema
+			.field_with_name(None, column)
 			.map_err(|_| NailError::ColumnNotFound(column.clone()))?;
 
 		let col_expr = col(format!("\"{}\"", column));
 
 		for value in search_values {
-			if let Some(cond) = build_value_condition(&col_expr, field.data_type(), &schema, value, ignore_case, exact) {
+			if let Some(cond) = build_value_condition(
+				&col_expr,
+				field.data_type(),
+				&schema,
+				value,
+				ignore_case,
+				exact,
+			) {
 				conditions.push(cond);
 			}
 		}
 	}
 
 	if conditions.is_empty() {
-		return Err(NailError::InvalidArgument("No searchable columns found".to_string()));
+		return Err(NailError::InvalidArgument(
+			"No searchable columns found".to_string(),
+		));
 	}
 
-	let combined_filter = conditions.into_iter().reduce(|acc, expr| acc.or(expr)).unwrap();
+	let combined_filter = conditions
+		.into_iter()
+		.reduce(|acc, expr| acc.or(expr))
+		.unwrap();
 
 	let numbered_sql = format!(
 		"SELECT ROW_NUMBER() OVER() as row_number, * FROM {}",
@@ -220,9 +284,11 @@ mod tests {
 				input: PathBuf::from("data.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "test_value".to_string(),
 			columns: None,
@@ -245,9 +311,11 @@ mod tests {
 				input: PathBuf::from("sales.csv"),
 				output: Some(PathBuf::from("results.json")),
 				format: Some(crate::cli::OutputFormat::Json),
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: Some(4),
-                table: false,				verbose: true,
+				table: false,
+				verbose: true,
 			},
 			value: "john".to_string(),
 			columns: Some("name,customer,email".to_string()),
@@ -272,9 +340,11 @@ mod tests {
 				input: PathBuf::from("products.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "Premium Widget".to_string(),
 			columns: Some("product_name".to_string()),
@@ -297,9 +367,11 @@ mod tests {
 				input: PathBuf::from("logs.json"),
 				output: Some(PathBuf::from("matching_rows.csv")),
 				format: Some(crate::cli::OutputFormat::Csv),
-				random: Some(42),				batch_size: None,
+				random: Some(42),
+				batch_size: None,
 				jobs: Some(8),
-                table: false,				verbose: true,
+				table: false,
+				verbose: true,
 			},
 			value: "ERROR".to_string(),
 			columns: Some("level,message".to_string()),
@@ -324,9 +396,11 @@ mod tests {
 				input: PathBuf::from("numbers.xlsx"),
 				output: None,
 				format: Some(crate::cli::OutputFormat::Xlsx),
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "123.45".to_string(),
 			columns: Some("price,amount,total".to_string()),
@@ -349,9 +423,11 @@ mod tests {
 				input: PathBuf::from("users.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "ADMIN".to_string(),
 			columns: Some("role,status".to_string()),
@@ -374,9 +450,11 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "search_term".to_string(),
 			columns: Some("col1,col2".to_string()),
@@ -401,9 +479,11 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			value: "test".to_string(),
 			columns: Some("col_a, col_b , col_c".to_string()),

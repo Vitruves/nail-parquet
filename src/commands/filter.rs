@@ -1,17 +1,23 @@
-use clap::Args;
-use datafusion::prelude::*;
+use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
+use crate::utils::column::resolve_column_name;
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
-use crate::utils::column::resolve_column_name;
-use crate::cli::CommonArgs;
+use clap::Args;
+use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail filter data.parquet -c \"age>=18,status=active\"
+  nail filter sales.csv -c \"region=EU|region=US\" -o filtered.csv")]
 pub struct FilterArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
-	#[arg(short, long, help = "Column filter conditions.\n\
+
+	#[arg(
+		short,
+		long,
+		help = "Column filter conditions.\n\
 		Separators (AND binds tighter than OR):\n\
 		• ',' — AND between conditions\n\
 		• '|' — OR between conditions\n\
@@ -26,9 +32,10 @@ pub struct FilterArgs {
 		• Single: 'age>25'\n\
 		• AND: 'age>=18,salary<50000,status=active'\n\
 		• OR: 'status=active|status=pending'\n\
-		• Mixed: 'age>=18,salary<50000|role=admin'  => (age>=18 AND salary<50000) OR role=admin")]
+		• Mixed: 'age>=18,salary<50000|role=admin'  => (age>=18 AND salary<50000) OR role=admin"
+	)]
 	pub columns: Option<String>,
-	
+
 	#[arg(short, long, help = "Row filter type", value_enum)]
 	pub rows: Option<RowFilter>,
 }
@@ -42,28 +49,38 @@ pub enum RowFilter {
 }
 
 pub async fn execute(args: FilterArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
-	
-	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	args.common.log_if_verbose(&format!(
+		"Reading data from: {}",
+		args.common.input.display()
+	));
+
+	let df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let mut result_df = df;
-	
+
 	if let Some(col_conditions) = &args.columns {
-		args.common.log_if_verbose(&format!("Applying column filters: {}", col_conditions));
+		args.common
+			.log_if_verbose(&format!("Applying column filters: {}", col_conditions));
 		result_df = apply_column_filters(&result_df, col_conditions, args.common.jobs).await?;
 	}
-	
+
 	if let Some(row_filter) = &args.rows {
-		args.common.log_if_verbose(&format!("Applying row filter: {:?}", row_filter));
+		args.common
+			.log_if_verbose(&format!("Applying row filter: {:?}", row_filter));
 		result_df = apply_row_filter(&result_df, row_filter, args.common.jobs).await?;
 	}
-	
+
 	let output_handler = OutputHandler::new(&args.common);
 	output_handler.handle_output(&result_df, "filter").await?;
-	
+
 	Ok(())
 }
 
-async fn apply_column_filters(df: &DataFrame, conditions: &str, jobs: Option<usize>) -> NailResult<DataFrame> {
+async fn apply_column_filters(
+	df: &DataFrame,
+	conditions: &str,
+	jobs: Option<usize>,
+) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
@@ -77,18 +94,27 @@ async fn apply_column_filters(df: &DataFrame, conditions: &str, jobs: Option<usi
 
 /// Parse a filter expression with AND (',') and OR ('|') separators.
 /// AND binds tighter than OR, so `a=1,b=2|c=3` becomes `(a=1 AND b=2) OR c=3`.
-async fn parse_filter_expression(expression: &str, schema: &datafusion::common::DFSchemaRef) -> NailResult<Expr> {
+async fn parse_filter_expression(
+	expression: &str,
+	schema: &datafusion::common::DFSchemaRef,
+) -> NailResult<Expr> {
 	let mut or_groups = Vec::new();
 	for or_group in expression.split('|') {
 		let or_group = or_group.trim();
 		if or_group.is_empty() {
-			return Err(NailError::InvalidArgument(format!("Empty OR group in: {}", expression)));
+			return Err(NailError::InvalidArgument(format!(
+				"Empty OR group in: {}",
+				expression
+			)));
 		}
 		let mut and_exprs = Vec::new();
 		for condition in or_group.split(',') {
 			let condition = condition.trim();
 			if condition.is_empty() {
-				return Err(NailError::InvalidArgument(format!("Empty condition in: {}", expression)));
+				return Err(NailError::InvalidArgument(format!(
+					"Empty condition in: {}",
+					expression
+				)));
 			}
 			and_exprs.push(parse_condition_with_schema(condition, schema).await?);
 		}
@@ -98,17 +124,20 @@ async fn parse_filter_expression(expression: &str, schema: &datafusion::common::
 	Ok(or_groups.into_iter().reduce(|acc, e| acc.or(e)).unwrap())
 }
 
-async fn parse_condition_with_schema(condition: &str, schema: &datafusion::common::DFSchemaRef) -> NailResult<Expr> {
+async fn parse_condition_with_schema(
+	condition: &str,
+	schema: &datafusion::common::DFSchemaRef,
+) -> NailResult<Expr> {
 	let operators = [">=", "<=", "!=", "=", ">", "<"];
-	
+
 	for op in &operators {
 		if let Some(pos) = condition.find(op) {
 			let column_name_input = condition[..pos].trim();
 			let value_str = condition[pos + op.len()..].trim();
-			
+
 			// Use the centralized column resolution utility
 			let actual_column_name = resolve_column_name(schema, column_name_input)?;
-			
+
 			let value_expr = if let Ok(int_val) = value_str.parse::<i64>() {
 				lit(int_val)
 			} else if let Ok(float_val) = value_str.parse::<f64>() {
@@ -116,10 +145,13 @@ async fn parse_condition_with_schema(condition: &str, schema: &datafusion::commo
 			} else {
 				lit(value_str)
 			};
-			
+
 			// Use quoted column name to preserve case sensitivity
-			let column_expr = Expr::Column(datafusion::common::Column::new(None::<String>, &actual_column_name));
-			
+			let column_expr = Expr::Column(datafusion::common::Column::new(
+				None::<String>,
+				&actual_column_name,
+			));
+
 			return Ok(match *op {
 				"=" => column_expr.eq(value_expr),
 				"!=" => column_expr.not_eq(value_expr),
@@ -131,92 +163,135 @@ async fn parse_condition_with_schema(condition: &str, schema: &datafusion::commo
 			});
 		}
 	}
-	
-	Err(NailError::InvalidArgument(format!("Invalid condition: {}", condition)))
+
+	Err(NailError::InvalidArgument(format!(
+		"Invalid condition: {}",
+		condition
+	)))
 }
 
-async fn apply_row_filter(df: &DataFrame, filter: &RowFilter, jobs: Option<usize>) -> NailResult<DataFrame> {
+async fn apply_row_filter(
+	df: &DataFrame,
+	filter: &RowFilter,
+	jobs: Option<usize>,
+) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
-	
+
 	let schema = df.schema();
 	let filter_expr = match filter {
 		RowFilter::NoNan => {
-			let conditions: Vec<Expr> = schema.fields().iter()
-				.map(|f| Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).is_not_null())
+			let conditions: Vec<Expr> = schema
+				.fields()
+				.iter()
+				.map(|f| {
+					Expr::Column(datafusion::common::Column::new(None::<String>, f.name()))
+						.is_not_null()
+				})
 				.collect();
-			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
-		},
+			conditions
+				.into_iter()
+				.reduce(|acc, expr| acc.and(expr))
+				.unwrap()
+		}
 		RowFilter::NumericOnly => {
 			// Filter rows where all numeric columns have valid numeric values (not null)
-			let numeric_columns: Vec<String> = schema.fields().iter()
-				.filter(|f| matches!(f.data_type(), 
-					datafusion::arrow::datatypes::DataType::Int64 | 
-					datafusion::arrow::datatypes::DataType::Float64 | 
-					datafusion::arrow::datatypes::DataType::Int32 | 
-					datafusion::arrow::datatypes::DataType::Float32
-				))
+			let numeric_columns: Vec<String> = schema
+				.fields()
+				.iter()
+				.filter(|f| {
+					matches!(
+						f.data_type(),
+						datafusion::arrow::datatypes::DataType::Int64
+							| datafusion::arrow::datatypes::DataType::Float64
+							| datafusion::arrow::datatypes::DataType::Int32
+							| datafusion::arrow::datatypes::DataType::Float32
+					)
+				})
 				.map(|f| f.name().clone())
 				.collect();
-			
+
 			if numeric_columns.is_empty() {
-				return Err(NailError::InvalidArgument("No numeric columns found".to_string()));
+				return Err(NailError::InvalidArgument(
+					"No numeric columns found".to_string(),
+				));
 			}
-			
+
 			// Create conditions that all numeric columns must not be null
-			let conditions: Vec<Expr> = numeric_columns.iter()
-				.map(|name| Expr::Column(datafusion::common::Column::new(None::<String>, name)).is_not_null())
+			let conditions: Vec<Expr> = numeric_columns
+				.iter()
+				.map(|name| {
+					Expr::Column(datafusion::common::Column::new(None::<String>, name))
+						.is_not_null()
+				})
 				.collect();
-			
-			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
-		},
+
+			conditions
+				.into_iter()
+				.reduce(|acc, expr| acc.and(expr))
+				.unwrap()
+		}
 		RowFilter::CharOnly => {
 			// Filter rows where all string columns have non-null values
-			let char_columns: Vec<String> = schema.fields().iter()
+			let char_columns: Vec<String> = schema
+				.fields()
+				.iter()
 				.filter(|f| matches!(f.data_type(), datafusion::arrow::datatypes::DataType::Utf8))
 				.map(|f| f.name().clone())
 				.collect();
-			
+
 			if char_columns.is_empty() {
-				return Err(NailError::InvalidArgument("No string columns found".to_string()));
+				return Err(NailError::InvalidArgument(
+					"No string columns found".to_string(),
+				));
 			}
-			
+
 			// Create conditions that all string columns must not be null and not empty
-			let conditions: Vec<Expr> = char_columns.iter()
+			let conditions: Vec<Expr> = char_columns
+				.iter()
 				.map(|name| {
-					let col_expr = Expr::Column(datafusion::common::Column::new(None::<String>, name));
+					let col_expr =
+						Expr::Column(datafusion::common::Column::new(None::<String>, name));
 					col_expr.clone().is_not_null().and(col_expr.not_eq(lit("")))
 				})
 				.collect();
-			
-			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
-		},
+
+			conditions
+				.into_iter()
+				.reduce(|acc, expr| acc.and(expr))
+				.unwrap()
+		}
 		RowFilter::NoZeros => {
-			let conditions: Vec<Expr> = schema.fields().iter()
-				.filter_map(|f| {
-					match f.data_type() {
-						datafusion::arrow::datatypes::DataType::Int64 | 
-						datafusion::arrow::datatypes::DataType::Int32 => {
-							Some(Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).not_eq(lit(0)))
-						},
-						datafusion::arrow::datatypes::DataType::Float64 | 
-						datafusion::arrow::datatypes::DataType::Float32 => {
-							Some(Expr::Column(datafusion::common::Column::new(None::<String>, f.name())).not_eq(lit(0.0)))
-						},
-						_ => None,
-					}
+			let conditions: Vec<Expr> = schema
+				.fields()
+				.iter()
+				.filter_map(|f| match f.data_type() {
+					datafusion::arrow::datatypes::DataType::Int64
+					| datafusion::arrow::datatypes::DataType::Int32 => Some(
+						Expr::Column(datafusion::common::Column::new(None::<String>, f.name()))
+							.not_eq(lit(0)),
+					),
+					datafusion::arrow::datatypes::DataType::Float64
+					| datafusion::arrow::datatypes::DataType::Float32 => Some(
+						Expr::Column(datafusion::common::Column::new(None::<String>, f.name()))
+							.not_eq(lit(0.0)),
+					),
+					_ => None,
 				})
 				.collect();
-			
+
 			if conditions.is_empty() {
 				return Ok(df.clone());
 			}
-			
-			conditions.into_iter().reduce(|acc, expr| acc.and(expr)).unwrap()
-		},
+
+			conditions
+				.into_iter()
+				.reduce(|acc, expr| acc.and(expr))
+				.unwrap()
+		}
 	};
-	
+
 	let result = ctx.table(table_name).await?.filter(filter_expr)?;
 	Ok(result)
 }

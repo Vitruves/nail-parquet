@@ -7,21 +7,30 @@ use std::path::PathBuf;
 use crate::error::{NailError, NailResult};
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail completions bash > ~/.local/share/bash-completion/completions/nail
+  nail completions fish > ~/.config/fish/completions/nail.fish")]
 pub struct CompletionsArgs {
 	#[arg(value_enum, help = "Target shell")]
 	pub shell: Shell,
 
-	#[arg(long, help = "Install the completion script into the standard user location for the target shell.\n\
+	#[arg(
+		long,
+		help = "Install the completion script into the standard user location for the target shell.\n\
 		Standard locations:\n\
 		• bash:       ~/.local/share/bash-completion/completions/nail\n\
 		• zsh:        ~/.zfunc/_nail (ensure 'fpath+=~/.zfunc' and 'autoload -Uz compinit && compinit' in ~/.zshrc)\n\
 		• fish:       ~/.config/fish/completions/nail.fish\n\
 		• elvish:     ~/.config/elvish/lib/nail-completions.elv\n\
-		• powershell: appended to your $PROFILE")]
+		• powershell: appended to your $PROFILE"
+	)]
 	pub auto_install: bool,
 
-	#[arg(long, value_name = "PATH",
-		help = "Write the completion script to a custom file path instead of stdout")]
+	#[arg(
+		long,
+		value_name = "PATH",
+		help = "Write the completion script to a custom file path instead of stdout"
+	)]
 	pub location: Option<PathBuf>,
 }
 
@@ -48,7 +57,11 @@ pub async fn execute(args: CompletionsArgs) -> NailResult<()> {
 			.open(&target)
 			.map_err(NailError::Io)?;
 		generate(args.shell, &mut cmd, name, &mut file);
-		println!("Installed {} completions to: {}", args.shell, target.display());
+		println!(
+			"Installed {} completions to: {}",
+			args.shell,
+			target.display()
+		);
 		print_shell_activation_hint(args.shell, &target);
 	} else if let Some(path) = &args.location {
 		if let Some(parent) = path.parent() {
@@ -117,7 +130,9 @@ fn print_shell_activation_hint(shell: Shell, path: &std::path::Path) {
 			println!("  use nail-completions");
 		}
 		Shell::PowerShell => {
-			println!("Completions appended to your PowerShell $PROFILE. Restart PowerShell to activate.");
+			println!(
+				"Completions appended to your PowerShell $PROFILE. Restart PowerShell to activate."
+			);
 		}
 		_ => {}
 	}

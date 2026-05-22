@@ -86,7 +86,10 @@ Available on all commands:
 | `-v, --verbose` | Timing and progress output |
 | `-j, --jobs N` | Parallel jobs (default: half of CPU cores) |
 | `-o, --output FILE` | Output file (prints to console if omitted) |
-| `-f, --format FORMAT` | Output format: `json`, `csv`, `parquet`, `text` |
+| `-f, --format FORMAT` | Output format: `json`, `csv`, `parquet`, `text`, `xlsx` |
+| `--batch-size N` | DataFusion batch size (rows per record batch) |
+| `--table` | Display console output as a columnar table instead of cards |
+| `--random N` | Random seed for reproducible results |
 | `-h, --help` | Command help |
 
 ## Examples

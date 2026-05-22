@@ -3,9 +3,9 @@ mod commands;
 mod error;
 mod utils;
 
+pub use crate::commands::select::{parse_row_specification, select_columns_by_pattern};
 use cli::Cli;
 use error::NailResult;
-pub use crate::commands::select::{select_columns_by_pattern, parse_row_specification};
 
 #[tokio::main]
 async fn main() {
@@ -17,7 +17,7 @@ async fn main() {
 
 async fn run() -> NailResult<()> {
 	let cli = Cli::parse_with_width();
-	
+
 	match cli.command {
 		commands::Commands::Head(args) => commands::head::execute(args).await,
 		commands::Commands::Tail(args) => commands::tail::execute(args).await,
@@ -50,6 +50,7 @@ async fn run() -> NailResult<()> {
 		commands::Commands::Append(args) => commands::append::execute(args).await,
 		commands::Commands::Sort(args) => commands::sort::execute(args).await,
 		commands::Commands::Split(args) => commands::split::execute(args).await,
+		commands::Commands::Clean(args) => commands::clean::execute(args).await,
 		commands::Commands::Convert(args) => commands::convert::execute(args).await,
 		commands::Commands::Optimize(args) => commands::optimize::execute(args).await,
 		commands::Commands::Update(args) => commands::update::execute(args).await,

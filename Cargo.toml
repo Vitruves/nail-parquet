@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.7.0"
+version = "1.7.1"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "Lightning-fast CLI for data analysis: explore, filter, transform Parquet/CSV/Excel files with SQL-powered operations"
@@ -31,6 +31,7 @@ datafusion = { version = "42.2", default-features = false, features = [
 arrow = "53.1"
 arrow-schema = "53.1"
 parquet = "53.1"
+bytes = "1"
 rand = "0.8"
 statrs = "0.17"
 regex = "1"

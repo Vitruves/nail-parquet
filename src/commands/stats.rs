@@ -1,11 +1,17 @@
-use clap::Args;
+use crate::cli::CommonArgs;
 use crate::error::NailResult;
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
-use crate::utils::stats::{calculate_basic_stats, calculate_exhaustive_stats, calculate_custom_stats, calculate_hypothesis_tests, select_columns_by_pattern};
-use crate::cli::CommonArgs;
+use crate::utils::stats::{
+	calculate_basic_stats, calculate_custom_stats, calculate_exhaustive_stats,
+	calculate_hypothesis_tests, select_columns_by_pattern,
+};
+use clap::Args;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail stats data.parquet
+  nail stats data.csv -c price,quantity -o stats.json")]
 pub struct StatsArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
@@ -13,7 +19,13 @@ pub struct StatsArgs {
 	#[arg(short, long, help = "Comma-separated column names or regex patterns")]
 	pub columns: Option<String>,
 
-	#[arg(short = 't', long, help = "Statistics type", value_enum, default_value = "basic")]
+	#[arg(
+		short = 't',
+		long,
+		help = "Statistics type",
+		value_enum,
+		default_value = "basic"
+	)]
 	pub stats_type: StatsType,
 
 	#[arg(long, help = "Include only numeric columns")]
@@ -22,7 +34,11 @@ pub struct StatsArgs {
 	#[arg(long, help = "Include only categorical (string) columns")]
 	pub categorical_only: bool,
 
-	#[arg(short, long, help = "Custom percentiles (comma-separated, e.g., '0.1,0.5,0.9')")]
+	#[arg(
+		short,
+		long,
+		help = "Custom percentiles (comma-separated, e.g., '0.1,0.5,0.9')"
+	)]
 	pub percentiles: Option<String>,
 }
 
@@ -34,9 +50,13 @@ pub enum StatsType {
 }
 
 pub async fn execute(args: StatsArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
+	args.common.log_if_verbose(&format!(
+		"Reading data from: {}",
+		args.common.input.display()
+	));
 
-	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	let df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let schema = df.schema();
 
 	// Get target columns based on pattern
@@ -48,10 +68,19 @@ pub async fn execute(args: StatsArgs) -> NailResult<()> {
 
 	// Filter by column type if requested
 	if args.numeric_only || args.categorical_only {
-		target_columns = filter_columns_by_type(&df, &target_columns, args.numeric_only, args.categorical_only)?;
+		target_columns = filter_columns_by_type(
+			&df,
+			&target_columns,
+			args.numeric_only,
+			args.categorical_only,
+		)?;
 	}
 
-	args.common.log_if_verbose(&format!("Computing {:?} statistics for {} columns", args.stats_type, target_columns.len()));
+	args.common.log_if_verbose(&format!(
+		"Computing {:?} statistics for {} columns",
+		args.stats_type,
+		target_columns.len()
+	));
 
 	// Use custom stats if percentiles specified
 	let stats_df = if let Some(ref percentile_str) = args.percentiles {
@@ -81,11 +110,9 @@ fn parse_percentiles(percentile_str: &str) -> NailResult<Vec<f64>> {
 	percentile_str
 		.split(',')
 		.map(|s| {
-			s.trim()
-				.parse::<f64>()
-				.map_err(|_| crate::error::NailError::InvalidArgument(
-					format!("Invalid percentile value: {}", s)
-				))
+			s.trim().parse::<f64>().map_err(|_| {
+				crate::error::NailError::InvalidArgument(format!("Invalid percentile value: {}", s))
+			})
 		})
 		.collect()
 }
@@ -109,15 +136,19 @@ fn filter_columns_by_type(
 		let field = field.unwrap();
 		let is_numeric = matches!(
 			field.data_type(),
-			DataType::Int64 | DataType::Float64 | DataType::Int32 | DataType::Float32
-				| DataType::Int16 | DataType::Int8 | DataType::UInt64 | DataType::UInt32
-				| DataType::UInt16 | DataType::UInt8
+			DataType::Int64
+				| DataType::Float64
+				| DataType::Int32
+				| DataType::Float32
+				| DataType::Int16
+				| DataType::Int8
+				| DataType::UInt64
+				| DataType::UInt32
+				| DataType::UInt16
+				| DataType::UInt8
 		);
 
-		let is_string = matches!(
-			field.data_type(),
-			DataType::Utf8 | DataType::LargeUtf8
-		);
+		let is_string = matches!(field.data_type(), DataType::Utf8 | DataType::LargeUtf8);
 
 		let include = (numeric_only && is_numeric)
 			|| (categorical_only && is_string)

@@ -1,13 +1,14 @@
-pub mod io;
-pub mod format;
-pub mod stats;
-pub mod parquet_utils;
-pub mod output;
 pub mod column;
+pub mod format;
+pub mod io;
+pub mod output;
+pub mod parquet_utils;
+pub mod stats;
+pub mod suggest;
 
+use crate::error::{NailError, NailResult};
 use datafusion::prelude::*;
 use std::path::Path;
-use crate::error::{NailError, NailResult};
 
 const DEFAULT_BATCH_SIZE_LARGE: usize = 32_768;
 const DEFAULT_BATCH_SIZE_JOBS: usize = 8_192;
@@ -51,9 +52,10 @@ pub fn detect_file_format(path: &Path) -> NailResult<FileFormat> {
 		Some("csv") => Ok(FileFormat::Csv),
 		Some("json") => Ok(FileFormat::Json),
 		Some("xlsx") => Ok(FileFormat::Excel),
-		_ => Err(NailError::UnsupportedFormat(
-			format!("Unable to detect format for file: {}", path.display())
-		)),
+		_ => Err(NailError::UnsupportedFormat(format!(
+			"Unable to detect format for file: {}",
+			path.display()
+		))),
 	}
 }
 

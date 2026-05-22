@@ -1904,11 +1904,12 @@ dependencies = [
 
 [[package]]
 name = "nail-parquet"
-version = "1.7.0"
+version = "1.7.1"
 dependencies = [
  "arrow",
  "arrow-schema",
  "assert_cmd",
+ "bytes",
  "calamine",
  "chrono",
  "clap",

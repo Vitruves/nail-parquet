@@ -1,0 +1,166 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (e.g. v1.7.1)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: nail
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Fully static Linux binaries (musl) — no glibc dependency,
+          # so they run on Ubuntu 22.04, Debian 11, RHEL 8, Alpine, etc.
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: false
+            archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use_cross: true
+            archive: tar.gz
+          # macOS
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use_cross: false
+            archive: tar.gz
+          # Windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use_cross: false
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install musl tools (Linux x86_64-musl)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build (cargo)
+        if: '!matrix.use_cross'
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --locked --target ${{ matrix.target }}
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package archive
+        id: pkg
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          NAME="${BIN_NAME}-${TAG}-${{ matrix.target }}"
+          mkdir -p "dist/${NAME}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}.exe" "dist/${NAME}/"
+          else
+            cp "target/${{ matrix.target }}/release/${BIN_NAME}" "dist/${NAME}/"
+          fi
+          cp README.md LICENSE "dist/${NAME}/" 2>/dev/null || true
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "${NAME}.zip" "${NAME}" >/dev/null
+            echo "asset=dist/${NAME}.zip" >> "$GITHUB_OUTPUT"
+          else
+            tar -czf "${NAME}.tar.gz" "${NAME}"
+            echo "asset=dist/${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          cd dist
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            shasum -a 256 *.tar.gz *.zip 2>/dev/null > SHA256SUMS-${{ matrix.target }}.txt || true
+          else
+            sha256sum *.tar.gz *.zip 2>/dev/null > SHA256SUMS-${{ matrix.target }}.txt || true
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS-*.txt
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p dist
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name 'SHA256SUMS-*.txt' \) -exec cp {} dist/ \;
+          cd dist && cat SHA256SUMS-*.txt > SHA256SUMS.txt && rm -f SHA256SUMS-*.txt
+          ls -la
+
+      - name: Resolve tag
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true

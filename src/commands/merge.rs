@@ -1,39 +1,52 @@
-use clap::Args;
-use datafusion::prelude::*;
-use std::path::PathBuf;
+use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::{read_data, read_data_with_opts};
 use crate::utils::output::OutputHandler;
-use crate::cli::CommonArgs;
+use clap::Args;
+use datafusion::prelude::*;
+use std::path::PathBuf;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail merge customers.parquet --right orders.parquet --key-mapping customer_id=cust_id
+  nail merge a.csv --right b.csv --key-mapping id=id --left-join -o joined.csv")]
 pub struct MergeArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
+
 	#[arg(short, long, help = "Right table file to merge with")]
 	pub right: PathBuf,
-	
+
 	#[arg(long, help = "Perform left join")]
 	pub left_join: bool,
-	
+
 	#[arg(long, help = "Perform right join")]
 	pub right_join: bool,
-	
+
 	#[arg(long, help = "Join key column name")]
 	pub key: Option<String>,
-	
-	#[arg(long, help = "Key mapping for different column names (format: left_col=right_col)")]
+
+	#[arg(
+		long,
+		help = "Key mapping for different column names (format: left_col=right_col)"
+	)]
 	pub key_mapping: Option<String>,
 }
 
 pub async fn execute(args: MergeArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Reading left table from: {}", args.common.input.display()));
-	args.common.log_if_verbose(&format!("Reading right table from: {}", args.right.display()));
-	
-	let left_df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+	args.common.log_if_verbose(&format!(
+		"Reading left table from: {}",
+		args.common.input.display()
+	));
+	args.common.log_if_verbose(&format!(
+		"Reading right table from: {}",
+		args.right.display()
+	));
+
+	let left_df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 	let right_df = read_data(&args.right).await?;
-	
+
 	let join_type = if args.left_join {
 		JoinType::Left
 	} else if args.right_join {
@@ -41,59 +54,82 @@ pub async fn execute(args: MergeArgs) -> NailResult<()> {
 	} else {
 		JoinType::Inner
 	};
-	
+
 	let (left_key, right_key) = if let Some(key_mapping) = &args.key_mapping {
 		parse_key_mapping(key_mapping)?
 	} else if let Some(key) = &args.key {
 		// Handle case-insensitive key matching
 		let left_schema = left_df.schema();
 		let right_schema = right_df.schema();
-		
-		let actual_left_key = left_schema.fields().iter()
+
+		let actual_left_key = left_schema
+			.fields()
+			.iter()
 			.find(|f| f.name().to_lowercase() == key.to_lowercase())
 			.map(|f| f.name().clone())
 			.ok_or_else(|| {
-				let available_cols: Vec<String> = left_schema.fields().iter()
+				let available_cols: Vec<String> = left_schema
+					.fields()
+					.iter()
 					.map(|f| f.name().clone())
 					.collect();
 				NailError::ColumnNotFound(format!(
-					"Join key '{}' not found in left table. Available columns: {:?}", 
+					"Join key '{}' not found in left table. Available columns: {:?}",
 					key, available_cols
 				))
 			})?;
-			
-		let actual_right_key = right_schema.fields().iter()
+
+		let actual_right_key = right_schema
+			.fields()
+			.iter()
 			.find(|f| f.name().to_lowercase() == key.to_lowercase())
 			.map(|f| f.name().clone())
 			.ok_or_else(|| {
-				let available_cols: Vec<String> = right_schema.fields().iter()
+				let available_cols: Vec<String> = right_schema
+					.fields()
+					.iter()
 					.map(|f| f.name().clone())
 					.collect();
 				NailError::ColumnNotFound(format!(
-					"Join key '{}' not found in right table. Available columns: {:?}", 
+					"Join key '{}' not found in right table. Available columns: {:?}",
 					key, available_cols
 				))
 			})?;
-			
+
 		(actual_left_key, actual_right_key)
 	} else {
-		return Err(NailError::InvalidArgument("Either --key or --key-mapping must be specified".to_string()));
+		return Err(NailError::InvalidArgument(
+			"Either --key or --key-mapping must be specified".to_string(),
+		));
 	};
-	
-	args.common.log_if_verbose(&format!("Performing {:?} join on left.{} = right.{}", join_type, left_key, right_key));
-	
-	let result_df = perform_join(&left_df, &right_df, &left_key, &right_key, join_type, args.common.jobs).await?;
-	
+
+	args.common.log_if_verbose(&format!(
+		"Performing {:?} join on left.{} = right.{}",
+		join_type, left_key, right_key
+	));
+
+	let result_df = perform_join(
+		&left_df,
+		&right_df,
+		&left_key,
+		&right_key,
+		join_type,
+		args.common.jobs,
+	)
+	.await?;
+
 	let output_handler = OutputHandler::new(&args.common);
 	output_handler.handle_output(&result_df, "merge").await?;
-	
+
 	Ok(())
 }
 
 fn parse_key_mapping(mapping: &str) -> NailResult<(String, String)> {
 	let parts: Vec<&str> = mapping.split('=').collect();
 	if parts.len() != 2 {
-		return Err(NailError::InvalidArgument("Key mapping must be in format 'left_col=right_col'".to_string()));
+		return Err(NailError::InvalidArgument(
+			"Key mapping must be in format 'left_col=right_col'".to_string(),
+		));
 	}
 	Ok((parts[0].trim().to_string(), parts[1].trim().to_string()))
 }
@@ -107,33 +143,33 @@ async fn perform_join(
 	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
-	
+
 	ctx.register_table("left_table", left_df.clone().into_view())?;
 	ctx.register_table("right_table", right_df.clone().into_view())?;
-	
+
 	let left_schema = left_df.schema();
 	let right_schema = right_df.schema();
-	
+
 	let mut left_cols = Vec::new();
 	let mut right_cols = Vec::new();
-	
+
 	for field in left_schema.fields() {
 		left_cols.push(format!("l.\"{}\"", field.name()));
 	}
-	
+
 	for field in right_schema.fields() {
 		if field.name() != right_key {
 			right_cols.push(format!("r.\"{}\" as \"r_{}\"", field.name(), field.name()));
 		}
 	}
-	
+
 	let join_clause = match join_type {
 		JoinType::Inner => "INNER JOIN",
 		JoinType::Left => "LEFT JOIN",
 		JoinType::Right => "RIGHT JOIN",
 		_ => "INNER JOIN",
 	};
-	
+
 	let sql = format!(
 		"SELECT {} FROM left_table l {} right_table r ON l.\"{}\" = r.\"{}\"",
 		[left_cols, right_cols].concat().join(", "),
@@ -141,7 +177,7 @@ async fn perform_join(
 		left_key,
 		right_key
 	);
-	
+
 	let result = ctx.sql(&sql).await?;
 	Ok(result)
 }
@@ -158,9 +194,11 @@ mod tests {
 				input: PathBuf::from("left.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			right: PathBuf::from("right.parquet"),
 			left_join: false,
@@ -183,9 +221,11 @@ mod tests {
 				input: PathBuf::from("table1.csv"),
 				output: Some(PathBuf::from("merged.parquet")),
 				format: Some(crate::cli::OutputFormat::Parquet),
-				random: Some(123),				batch_size: None,
+				random: Some(123),
+				batch_size: None,
 				jobs: Some(8),
-                table: false,				verbose: true,
+				table: false,
+				verbose: true,
 			},
 			right: PathBuf::from("table2.csv"),
 			left_join: true,
@@ -210,9 +250,11 @@ mod tests {
 				input: PathBuf::from("data.json"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			right: PathBuf::from("lookup.json"),
 			left_join: false,
@@ -250,7 +292,10 @@ mod tests {
 	fn test_parse_key_mapping_invalid() {
 		let result = parse_key_mapping("invalid_format");
 		assert!(result.is_err());
-		assert!(result.unwrap_err().to_string().contains("Key mapping must be in format"));
+		assert!(result
+			.unwrap_err()
+			.to_string()
+			.contains("Key mapping must be in format"));
 	}
 
 	#[test]
@@ -266,9 +311,11 @@ mod tests {
 				input: PathBuf::from("test.parquet"),
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				jobs: None,
-                table: false,				verbose: false,
+				table: false,
+				verbose: false,
 			},
 			right: PathBuf::from("right.parquet"),
 			left_join: true,

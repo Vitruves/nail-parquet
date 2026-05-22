@@ -1,66 +1,85 @@
-use clap::Args;
-use datafusion::prelude::*;
+use crate::cli::CommonArgs;
 use crate::error::NailResult;
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
-use crate::cli::CommonArgs;
+use clap::Args;
+use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
+#[command(after_help = "Examples:
+  nail id data.parquet -o with_id.parquet
+  nail id sales.csv --name row_id -o tagged.csv")]
 pub struct IdArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-	
+
 	#[arg(long, help = "Create new ID column")]
 	pub create: bool,
-	
+
 	#[arg(long, help = "Prefix for ID values", default_value = "id")]
 	pub prefix: String,
-	
+
 	#[arg(long, help = "ID column name", default_value = "id")]
 	pub id_col_name: String,
 }
 
 pub async fn execute(args: IdArgs) -> NailResult<()> {
-	args.common.log_if_verbose(&format!("Reading data from: {}", args.common.input.display()));
-	
-	let df = read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
-	
+	args.common.log_if_verbose(&format!(
+		"Reading data from: {}",
+		args.common.input.display()
+	));
+
+	let df =
+		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
+
 	let result_df = if args.create {
-		args.common.log_if_verbose(&format!("Creating ID column '{}' with prefix '{}'", args.id_col_name, args.prefix));
+		args.common.log_if_verbose(&format!(
+			"Creating ID column '{}' with prefix '{}'",
+			args.id_col_name, args.prefix
+		));
 		add_id_column(&df, &args.id_col_name, &args.prefix, args.common.jobs).await?
 	} else {
 		df
 	};
-	
+
 	let output_handler = OutputHandler::new(&args.common);
 	output_handler.handle_output(&result_df, "id").await?;
-	
+
 	Ok(())
 }
 
-async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str, jobs: Option<usize>) -> NailResult<DataFrame> {
+async fn add_id_column(
+	df: &DataFrame,
+	col_name: &str,
+	prefix: &str,
+	jobs: Option<usize>,
+) -> NailResult<DataFrame> {
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
-	
+
 	// Check if column already exists
 	let schema = df.schema();
 	if schema.field_with_name(None, col_name).is_ok() {
-		return Err(crate::error::NailError::InvalidArgument(
-			format!("Column '{}' already exists. Use --id-col-name to specify a different name.", col_name)
-		));
+		return Err(crate::error::NailError::InvalidArgument(format!(
+			"Column '{}' already exists. Use --id-col-name to specify a different name.",
+			col_name
+		)));
 	}
-	
+
 	let id_col = if prefix.is_empty() {
 		"ROW_NUMBER() OVER()".to_string()
 	} else {
 		format!("CONCAT('{}', ROW_NUMBER() OVER())", prefix)
 	};
-	
-	let columns: Vec<String> = df.schema().fields().iter()
+
+	let columns: Vec<String> = df
+		.schema()
+		.fields()
+		.iter()
 		.map(|f| format!("\"{}\"", f.name()))
 		.collect();
-	
+
 	let sql = format!(
 		"SELECT {} as \"{}\", {} FROM {}",
 		id_col,
@@ -68,7 +87,7 @@ async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str, jobs: Optio
 		columns.join(", "),
 		table_name
 	);
-	
+
 	let result = ctx.sql(&sql).await?;
 	Ok(result)
 }
@@ -77,20 +96,20 @@ async fn add_id_column(df: &DataFrame, col_name: &str, prefix: &str, jobs: Optio
 mod tests {
 	use super::*;
 	use crate::cli::CommonArgs;
-	use std::path::PathBuf;
-	use tempfile::tempdir;
-	use datafusion::prelude::SessionContext;
-	use parquet::arrow::ArrowWriter;
-	use arrow::array::{Int64Array, StringArray, Float64Array};
+	use arrow::array::{Float64Array, Int64Array, StringArray};
 	use arrow::record_batch::RecordBatch;
 	use arrow_schema::{DataType, Field, Schema};
+	use datafusion::prelude::SessionContext;
+	use parquet::arrow::ArrowWriter;
 	use std::fs::File;
+	use std::path::PathBuf;
 	use std::sync::Arc;
+	use tempfile::tempdir;
 
 	fn create_test_data() -> (tempfile::TempDir, PathBuf) {
 		let temp_dir = tempdir().unwrap();
 		let file_path = temp_dir.path().join("test.parquet");
-		
+
 		let schema = Arc::new(Schema::new(vec![
 			Field::new("name", DataType::Utf8, false),
 			Field::new("value", DataType::Float64, false),
@@ -108,7 +127,8 @@ mod tests {
 				Arc::new(value_array),
 				Arc::new(category_array),
 			],
-		).unwrap();
+		)
+		.unwrap();
 
 		let file = File::create(&file_path).unwrap();
 		let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
@@ -123,16 +143,18 @@ mod tests {
 		let (_temp_dir, input_path) = create_test_data();
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),
@@ -141,12 +163,15 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		// Check that ID column was added
 		assert!(df.schema().field_with_name(None, "id").is_ok());
 		assert_eq!(df.schema().fields().len(), 4); // Original 3 + ID column
-		
+
 		let row_count = df.clone().count().await.unwrap();
 		assert_eq!(row_count, 4);
 	}
@@ -156,16 +181,18 @@ mod tests {
 		let (_temp_dir, input_path) = create_test_data();
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "row_".to_string(),
 			id_col_name: "row_id".to_string(),
@@ -174,8 +201,11 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		// Check that custom ID column was added
 		assert!(df.schema().field_with_name(None, "row_id").is_ok());
 		assert!(df.schema().field_with_name(None, "id").is_err()); // Default name should not exist
@@ -186,16 +216,18 @@ mod tests {
 		let (_temp_dir, input_path) = create_test_data();
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "".to_string(), // Empty prefix
 			id_col_name: "row_num".to_string(),
@@ -204,8 +236,11 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		// Check that ID column was added with numeric values only
 		assert!(df.schema().field_with_name(None, "row_num").is_ok());
 	}
@@ -215,16 +250,18 @@ mod tests {
 		let (_temp_dir, input_path) = create_test_data();
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: false, // Don't create ID column
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),
@@ -233,8 +270,11 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		// Should be identical to input (no ID column added)
 		assert!(df.schema().field_with_name(None, "id").is_err());
 		assert_eq!(df.schema().fields().len(), 3); // Original columns only
@@ -244,7 +284,7 @@ mod tests {
 	async fn test_id_column_already_exists() {
 		let temp_dir = tempdir().unwrap();
 		let file_path = temp_dir.path().join("test_with_id.parquet");
-		
+
 		// Create data that already has an 'id' column
 		let schema = Arc::new(Schema::new(vec![
 			Field::new("id", DataType::Int64, false), // Already has ID column
@@ -257,22 +297,25 @@ mod tests {
 		let batch = RecordBatch::try_new(
 			schema.clone(),
 			vec![Arc::new(id_array), Arc::new(name_array)],
-		).unwrap();
+		)
+		.unwrap();
 
 		let file = File::create(&file_path).unwrap();
 		let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
 		writer.write(&batch).unwrap();
 		writer.close().unwrap();
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: file_path,
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(), // Same name as existing column
@@ -286,16 +329,18 @@ mod tests {
 	#[tokio::test]
 	async fn test_id_verbose_mode() {
 		let (_temp_dir, input_path) = create_test_data();
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: None,
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: true,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "test_".to_string(),
 			id_col_name: "test_id".to_string(),
@@ -310,13 +355,14 @@ mod tests {
 		let (_temp_dir, input_path) = create_test_data();
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: input_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: Some(2), // Test with specific job count
 				table: false,
@@ -329,8 +375,11 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		assert!(df.schema().field_with_name(None, "parallel_id").is_ok());
 		assert_eq!(df.clone().count().await.unwrap(), 4);
 	}
@@ -339,35 +388,32 @@ mod tests {
 	async fn test_id_empty_dataset() {
 		let temp_dir = tempdir().unwrap();
 		let file_path = temp_dir.path().join("empty.parquet");
-		
+
 		// Create empty dataset
-		let schema = Arc::new(Schema::new(vec![
-			Field::new("name", DataType::Utf8, false),
-		]));
+		let schema = Arc::new(Schema::new(vec![Field::new("name", DataType::Utf8, false)]));
 
 		let name_array = StringArray::from(Vec::<String>::new());
-		let batch = RecordBatch::try_new(
-			schema.clone(),
-			vec![Arc::new(name_array)],
-		).unwrap();
+		let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(name_array)]).unwrap();
 
 		let file = File::create(&file_path).unwrap();
 		let mut writer = ArrowWriter::try_new(file, schema, None).unwrap();
 		writer.write(&batch).unwrap();
 		writer.close().unwrap();
-		
+
 		let output_dir = tempdir().unwrap();
 		let output_path = output_dir.path().join("output.parquet");
-		
+
 		let args = IdArgs {
 			common: CommonArgs {
 				input: file_path,
 				output: Some(output_path.clone()),
 				format: None,
-				random: None,				batch_size: None,
+				random: None,
+				batch_size: None,
 				verbose: false,
 				jobs: None,
-                table: false,			},
+				table: false,
+			},
 			create: true,
 			prefix: "id".to_string(),
 			id_col_name: "id".to_string(),
@@ -376,8 +422,11 @@ mod tests {
 		execute(args).await.unwrap();
 
 		let ctx = SessionContext::new();
-		let df = ctx.read_parquet(output_path.to_str().unwrap(), Default::default()).await.unwrap();
-		
+		let df = ctx
+			.read_parquet(output_path.to_str().unwrap(), Default::default())
+			.await
+			.unwrap();
+
 		// Should have ID column even with empty data
 		assert!(df.schema().field_with_name(None, "id").is_ok());
 		assert_eq!(df.schema().fields().len(), 2); // Original + ID
