@@ -374,11 +374,9 @@ async fn run_ratatui_viewer_paged(
 				| KeyEvent {
 					code: KeyCode::Char('l'),
 					..
-				} => {
-					if *current_record + 1 < total_records {
-						*current_record += 1;
-						*row_offset = 0;
-					}
+				} if *current_record + 1 < total_records => {
+					*current_record += 1;
+					*row_offset = 0;
 				}
 				KeyEvent {
 					code: KeyCode::Left,
@@ -387,11 +385,9 @@ async fn run_ratatui_viewer_paged(
 				| KeyEvent {
 					code: KeyCode::Char('h'),
 					..
-				} => {
-					if *current_record > 0 {
-						*current_record -= 1;
-						*row_offset = 0;
-					}
+				} if *current_record > 0 => {
+					*current_record -= 1;
+					*row_offset = 0;
 				}
 				KeyEvent {
 					code: KeyCode::Down,
@@ -412,10 +408,8 @@ async fn run_ratatui_viewer_paged(
 				| KeyEvent {
 					code: KeyCode::Char('k'),
 					..
-				} => {
-					if *row_offset > 0 {
-						*row_offset -= 1;
-					}
+				} if *row_offset > 0 => {
+					*row_offset -= 1;
 				}
 				_ => {}
 			}
