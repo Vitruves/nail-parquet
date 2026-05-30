@@ -18,6 +18,8 @@ pub struct TestFixtures {
 	pub _temp_dir: TempDir, // Held for RAII cleanup
 	pub sample_parquet: PathBuf,
 	#[allow(dead_code)]
+	pub sample_nested_parquet: PathBuf,
+	#[allow(dead_code)]
 	pub sample2_parquet: PathBuf,
 	#[allow(dead_code)]
 	pub sample_with_nulls_parquet: PathBuf,
@@ -52,6 +54,9 @@ impl TestFixtures {
 		let sample_parquet = base_path.join("sample.parquet");
 		create_sample_parquet(&sample_parquet).unwrap();
 
+		let sample_nested_parquet = base_path.join("sample_nested.parquet");
+		create_nested_parquet(&sample_nested_parquet).unwrap();
+
 		let sample2_parquet = base_path.join("sample2.parquet");
 		create_sample2_parquet(&sample2_parquet).unwrap();
 
@@ -85,6 +90,7 @@ impl TestFixtures {
 		Self {
 			_temp_dir: temp_dir,
 			sample_parquet,
+			sample_nested_parquet,
 			sample2_parquet,
 			sample_with_nulls_parquet,
 			sample_with_duplicates_parquet,
@@ -162,6 +168,78 @@ fn create_sample_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> 
 				Some("B"),
 				Some("C"),
 			])),
+		],
+	)?;
+	let file = File::create(path)?;
+	let mut writer = ArrowWriter::try_new(file, schema, None)?;
+	writer.write(&batch)?;
+	writer.close()?;
+	Ok(())
+}
+
+/// A small fixture exercising nested Arrow types, mirroring real-world datasets:
+/// `messages` is List<Struct{role, content}>, `meta` is Struct{index, ok}, and
+/// `blob` is Binary. Two rows; row 1 has 2 messages, row 2 has 1.
+#[allow(dead_code)]
+fn create_nested_parquet(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+	use arrow::array::{ArrayRef, BinaryArray, ListArray, StructArray};
+	use arrow::buffer::OffsetBuffer;
+	use arrow_schema::Fields;
+
+	// messages: List<Struct{role: Utf8, content: Utf8}>
+	let role_field = Arc::new(Field::new("role", DataType::Utf8, true));
+	let content_field = Arc::new(Field::new("content", DataType::Utf8, true));
+	let msg_fields: Fields = vec![role_field, content_field].into();
+
+	let roles = Arc::new(StringArray::from(vec!["system", "user", "user"])) as ArrayRef;
+	// First content has an embedded newline on purpose: nested string leaves
+	// often contain them, and the columnar grid must flatten them.
+	let contents = Arc::new(StringArray::from(vec![
+		"be concise\nplease",
+		"hello there",
+		"second row",
+	])) as ArrayRef;
+	let msg_struct = StructArray::new(msg_fields.clone(), vec![roles, contents], None);
+
+	let element_field = Arc::new(Field::new(
+		"element",
+		DataType::Struct(msg_fields.clone()),
+		true,
+	));
+	// Row 0 -> messages[0..2], Row 1 -> messages[2..3]
+	let offsets = OffsetBuffer::new(vec![0i32, 2, 3].into());
+	let messages = ListArray::new(element_field.clone(), offsets, Arc::new(msg_struct), None);
+
+	// meta: Struct{index: Int64, ok: Boolean}
+	let index_field = Arc::new(Field::new("index", DataType::Int64, true));
+	let ok_field = Arc::new(Field::new("ok", DataType::Boolean, true));
+	let meta_fields: Fields = vec![index_field, ok_field].into();
+	let meta = StructArray::new(
+		meta_fields.clone(),
+		vec![
+			Arc::new(Int64Array::from(vec![0i64, 1])) as ArrayRef,
+			Arc::new(BooleanArray::from(vec![true, false])) as ArrayRef,
+		],
+		None,
+	);
+
+	// blob: Binary
+	let blob = BinaryArray::from_iter_values(vec![b"PNGDATA".as_ref(), b"\x00\x01\x02\x03\x04"]);
+
+	let schema = Arc::new(Schema::new(vec![
+		Field::new("id", DataType::Int64, false),
+		Field::new("messages", DataType::List(element_field), true),
+		Field::new("meta", DataType::Struct(meta_fields), true),
+		Field::new("blob", DataType::Binary, true),
+	]));
+
+	let batch = RecordBatch::try_new(
+		schema.clone(),
+		vec![
+			Arc::new(Int64Array::from(vec![1i64, 2])),
+			Arc::new(messages),
+			Arc::new(meta),
+			Arc::new(blob),
 		],
 	)?;
 	let file = File::create(path)?;

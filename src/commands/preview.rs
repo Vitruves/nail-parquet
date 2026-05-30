@@ -10,7 +10,6 @@ use crossterm::{
 	execute,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use datafusion::arrow::{array::*, datatypes::DataType};
 use datafusion::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
@@ -76,6 +75,7 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
 			args.common.output.as_deref(),
 			args.common.format.as_ref(),
 			args.common.table,
+			args.common.level,
 		)
 		.await?;
 		return Ok(());
@@ -93,6 +93,7 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
 			args.common.output.as_deref(),
 			args.common.format.as_ref(),
 			args.common.table,
+			args.common.level,
 		)
 		.await?;
 		return Ok(());
@@ -149,6 +150,7 @@ pub async fn execute(args: PreviewArgs) -> NailResult<()> {
 		args.common.output.as_deref(),
 		args.common.format.as_ref(),
 		args.common.table,
+		args.common.level,
 	)
 	.await?;
 
@@ -289,37 +291,56 @@ async fn run_ratatui_viewer_paged(
 
 				let batch = &current_batches[batch_idx];
 				let schema = batch.schema();
+				let level = _args.common.level;
+				// Match the card layout: a fixed field-name column, " : " separator,
+				// then value lines (tree or wrapped) in the remaining width.
+				const NAME_WIDTH: usize = 20;
+				let total_width = (chunks[0].width as usize).max(NAME_WIDTH + 8);
+				let value_width = total_width.saturating_sub(NAME_WIDTH + 3).max(10);
 				let content_iter = schema.fields().iter().enumerate().skip(*row_offset);
 				let lines: Vec<Line> = content_iter
-					.map(|(col_idx, field)| {
+					.flat_map(|(col_idx, field)| {
 						let column = batch.column(col_idx);
-						let is_null = column.is_null(row_idx);
-						let raw_value = if is_null {
-							"NULL".to_string()
-						} else {
-							format_cell_value_for_interactive(column, row_idx, field.data_type())
-						};
-
 						let field_color = FIELD_COLORS_TUI[col_idx % FIELD_COLORS_TUI.len()];
-						let field_span = Span::styled(
-							format!("{}: ", field.name()),
-							Style::default()
-								.fg(field_color)
-								.add_modifier(Modifier::BOLD),
+						let name_style = Style::default()
+							.fg(field_color)
+							.add_modifier(Modifier::BOLD);
+						let value_style = Style::default().fg(field_color);
+						let vlines = crate::utils::format::render_field_value_lines(
+							column,
+							row_idx,
+							field.data_type(),
+							level,
+							value_width,
 						);
-
-						let value_style = if is_null {
-							Style::default().fg(Color::DarkGray)
-						} else {
-							Style::default().fg(Color::White)
-						};
-						let value_span = Span::styled(raw_value, value_style);
-
-						Line::from(vec![field_span, value_span])
+						vlines
+							.into_iter()
+							.enumerate()
+							.map(|(i, vline)| {
+								if i == 0 {
+									Line::from(vec![
+										Span::styled(
+											format!("{:<width$}", field.name(), width = NAME_WIDTH),
+											name_style,
+										),
+										Span::styled(" : ".to_string(), name_style),
+										Span::styled(vline, value_style),
+									])
+								} else {
+									Line::from(vec![
+										Span::styled(
+											format!("{:<width$} : ", "", width = NAME_WIDTH),
+											value_style,
+										),
+										Span::styled(vline, value_style),
+									])
+								}
+							})
+							.collect::<Vec<Line>>()
 					})
 					.collect();
 
-				let table = Paragraph::new(lines).wrap(Wrap { trim: true });
+				let table = Paragraph::new(lines).wrap(Wrap { trim: false });
 
 				f.render_widget(table, chunks[0]);
 
@@ -423,89 +444,4 @@ async fn run_ratatui_viewer_paged(
 	terminal.show_cursor().ok();
 
 	Ok(())
-}
-
-fn format_cell_value_for_interactive(
-	column: &dyn Array,
-	row_idx: usize,
-	data_type: &DataType,
-) -> String {
-	const NULL_COLOR: &str = "\x1b[2;37m"; // Dim white
-	const RESET: &str = "\x1b[0m";
-
-	if column.is_null(row_idx) {
-		format!("{}{}{}", NULL_COLOR, "NULL", RESET)
-	} else {
-		match data_type {
-			DataType::Utf8 => {
-				let array = column.as_any().downcast_ref::<StringArray>().unwrap();
-				array.value(row_idx).to_string()
-			}
-			DataType::Int64 => {
-				if let Some(array) = column.as_any().downcast_ref::<Int64Array>() {
-					array.value(row_idx).to_string()
-				} else {
-					"0".to_string()
-				}
-			}
-			DataType::Float64 => {
-				if let Some(array) = column.as_any().downcast_ref::<Float64Array>() {
-					format!("{:.2}", array.value(row_idx))
-				} else {
-					"0.0".to_string()
-				}
-			}
-			DataType::Int32 => {
-				if let Some(array) = column.as_any().downcast_ref::<Int32Array>() {
-					array.value(row_idx).to_string()
-				} else {
-					"0".to_string()
-				}
-			}
-			DataType::Float32 => {
-				if let Some(array) = column.as_any().downcast_ref::<Float32Array>() {
-					format!("{:.2}", array.value(row_idx))
-				} else {
-					"0.0".to_string()
-				}
-			}
-			DataType::Boolean => {
-				let array = column.as_any().downcast_ref::<BooleanArray>().unwrap();
-				array.value(row_idx).to_string()
-			}
-			DataType::Date32 => {
-				let array = column.as_any().downcast_ref::<Date32Array>().unwrap();
-				let days_since_epoch = array.value(row_idx);
-				// Convert days since epoch to a readable date
-				let date = chrono::NaiveDate::from_num_days_from_ce_opt(days_since_epoch + 719163)
-					.unwrap_or_else(|| {
-						chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or_default()
-					});
-				date.format("%Y-%m-%d").to_string()
-			}
-			DataType::Date64 => {
-				let array = column.as_any().downcast_ref::<Date64Array>().unwrap();
-				let millis_since_epoch = array.value(row_idx);
-				let datetime = chrono::DateTime::from_timestamp_millis(millis_since_epoch)
-					.unwrap_or_else(|| {
-						chrono::DateTime::from_timestamp(0, 0)
-							.unwrap_or(chrono::DateTime::UNIX_EPOCH)
-					});
-				datetime.format("%Y-%m-%d").to_string()
-			}
-			_ => {
-				// Fallback for other types
-				format!("{:?}", column.slice(row_idx, 1))
-					.lines()
-					.next()
-					.unwrap_or("unknown")
-					.trim_start_matches('[')
-					.trim_end_matches(']')
-					.trim_start_matches("\"")
-					.trim_end_matches("\"")
-					.trim()
-					.to_string()
-			}
-		}
-	}
 }

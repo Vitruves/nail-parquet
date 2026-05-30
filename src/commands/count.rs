@@ -139,6 +139,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -156,6 +157,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -182,6 +184,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -205,6 +208,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -227,6 +231,7 @@ mod tests {
 				verbose: true, // Enable verbose mode
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -250,6 +255,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 
@@ -275,6 +281,7 @@ mod tests {
 				verbose: false,
 				jobs: None,
 				table: false,
+				level: 1,
 			},
 		};
 

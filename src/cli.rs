@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nail")]
 #[command(about = "A fast parquet utility written in Rust")]
-#[command(version = "1.7.1")]
+#[command(version = "1.8.0")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()
@@ -72,6 +72,14 @@ pub struct CommonArgs {
 
 	#[arg(long, help = "Display output as a columnar table instead of cards")]
 	pub table: bool,
+
+	#[arg(
+		short = 'L',
+		long,
+		default_value = "1",
+		help = "Max depth to expand nested values (List/Struct/Map); 0 collapses to a type tag"
+	)]
+	pub level: usize,
 }
 
 impl CommonArgs {

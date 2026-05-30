@@ -173,6 +173,7 @@ mod tests {
 				batch_size: None,
 				jobs: None,
 				table: false,
+				level: 1,
 				verbose: false,
 			},
 		};
@@ -194,6 +195,7 @@ mod tests {
 				batch_size: None,
 				jobs: Some(8),
 				table: false,
+				level: 1,
 				verbose: true,
 			},
 		};
@@ -216,6 +218,7 @@ mod tests {
 				batch_size: None,
 				jobs: Some(16),
 				table: false,
+				level: 1,
 				verbose: false,
 			},
 		};
@@ -237,6 +240,7 @@ mod tests {
 				batch_size: None,
 				jobs: None,
 				table: false,
+				level: 1,
 				verbose: true,
 			},
 		};
@@ -259,6 +263,7 @@ mod tests {
 				batch_size: None,
 				jobs: None,
 				table: false,
+				level: 1,
 				verbose: false,
 			},
 		};
@@ -272,6 +277,7 @@ mod tests {
 				batch_size: None,
 				jobs: None,
 				table: false,
+				level: 1,
 				verbose: false,
 			},
 		};

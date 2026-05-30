@@ -61,6 +61,7 @@ impl<'a> OutputHandler<'a> {
 					None,
 					self.common_args.format.as_ref(),
 					self.common_args.table,
+					self.common_args.level,
 				)
 				.await?;
 			}

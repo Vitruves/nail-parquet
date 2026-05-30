@@ -1,6 +1,6 @@
 [package]
 name = "nail-parquet"
-version = "1.7.1"
+version = "1.8.0"
 edition = "2021"
 authors = ["Johan HG Natter"]
 description = "Lightning-fast CLI for data analysis: explore, filter, transform Parquet/CSV/Excel files with SQL-powered operations"

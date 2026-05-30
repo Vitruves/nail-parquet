@@ -4,6 +4,41 @@ All notable changes to `nail-parquet` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] - 2026-05-30
+
+### Added
+- **`-L`/`--level` for nested values.** `head`/`tail`/`preview` (and any card
+  output) now expand `List`/`Struct`/`Map` columns instead of printing
+  `ListArray`/`StructArray`. The depth budget controls expansion: `-L 0`
+  collapses to a tag (`{…2 fields}`), the default `-L 1` shows one level, higher
+  values go deeper. Cards render an indented tree (single-element lists drop the
+  `-` bullet); `--table` stays compact; `-f json` emits valid nested JSON.
+  Binary blobs always render as `<N bytes>`, never raw — so image columns are
+  safe at any depth.
+
+### Fixed
+- **Many column types displayed their Arrow type name instead of a value.**
+  `head`/`tail`/`preview` now render real values for `Int8`/`Int16`/`UInt8`/
+  `UInt16`/`UInt32`, `Timestamp` (incl. timezone-aware), `Time32`/`Time64`,
+  `Decimal128`, `Dictionary`, `LargeUtf8`, `Binary`/`LargeBinary`, and other
+  types that previously printed `PrimitiveArray<…>`, `timestamp`, `ListArray`,
+  etc. Leaf values now go through Arrow's formatter, so the supported-type set
+  matches Arrow's. `nail head -f json` on these columns is now valid JSON
+  (strings with backslashes/control chars are properly escaped).
+
+### Changed
+- **`--table` rendering optimized for wide tables.** Cell content is capped at
+  30 chars with `…` truncation, and columns paginate into multiple bordered
+  table blocks that each fit the terminal width. A `#` row-index column is
+  repeated on every block so rows stay aligned across pages, and a
+  `cols A–B of N (page X/Y)` header annotates each subsequent block. Column
+  colors remain consistent across blocks.
+- **`nail correlations --matrix` redesigned.** Output is now a proper bordered
+  matrix table with column headers derived from the row labels (so names
+  containing dots/underscores like `__index_level_0__` no longer get mangled),
+  per-column auto-sizing, and color-coded cells (green for positive, red for
+  negative, intensity by magnitude; bold white for the 1.0 diagonal).
+
 ## [1.7.1] - 2026-05-21
 
 ### Fixed

@@ -1865,3 +1865,166 @@ mod new_command_tests {
 		assert!(!content.trim().is_empty());
 	}
 }
+
+// ---- NESTED VALUE RENDERING (-L / --level) ----
+#[cfg(test)]
+mod nested_value_tests {
+	use super::*;
+
+	fn head_nested(args: &[&str]) -> String {
+		let fixtures = TestFixtures::new();
+		let mut full = vec!["head", fixtures.sample_nested_parquet.to_str().unwrap()];
+		full.extend_from_slice(args);
+		let output = nail()
+			.args(&full)
+			.assert()
+			.success()
+			.get_output()
+			.stdout
+			.clone();
+		String::from_utf8(output).unwrap()
+	}
+
+	#[test]
+	fn test_nested_default_level_no_typename_dump() {
+		// Default -L 1 must never show the raw Arrow type names that the old
+		// formatter leaked, and Struct fields should be expanded.
+		let out = head_nested(&[]);
+		assert!(!out.contains("StructArray"), "leaked StructArray: {out}");
+		assert!(!out.contains("ListArray"), "leaked ListArray: {out}");
+		assert!(out.contains("index"), "meta struct not expanded: {out}");
+		assert!(
+			out.contains("split") || out.contains("ok"),
+			"meta fields missing: {out}"
+		);
+	}
+
+	#[test]
+	fn test_nested_level0_collapses() {
+		// -L 0 collapses every container to a compact type tag.
+		let out = head_nested(&["-L", "0"]);
+		assert!(
+			out.contains("items") || out.contains("fields"),
+			"no collapse tag: {out}"
+		);
+		assert!(
+			!out.contains("role"),
+			"should not expand struct contents at L0: {out}"
+		);
+	}
+
+	#[test]
+	fn test_nested_level2_expands_list_of_structs() {
+		// -L 2 expands the List<Struct> messages into per-element bullets.
+		let out = head_nested(&["-L", "2"]);
+		assert!(
+			out.contains("role"),
+			"list element field 'role' missing: {out}"
+		);
+		assert!(
+			out.contains("content"),
+			"list element field 'content' missing: {out}"
+		);
+		assert!(out.contains("hello there"), "leaf content missing: {out}");
+		// Row 0 has 2 messages, so it must use "- " bullets to mark boundaries.
+		assert!(
+			out.contains("- "),
+			"multi-element list missing bullets: {out}"
+		);
+	}
+
+	#[test]
+	fn test_nested_single_element_list_has_no_bullet() {
+		// Row 1 has exactly one message; a single-element list omits the bullet.
+		let out = head_nested(&["-L", "2", "-n", "2"]);
+		assert!(out.contains("second row"), "row-1 content missing: {out}");
+	}
+
+	#[test]
+	fn test_nested_binary_never_dumped() {
+		// Binary blobs always render as a byte-count summary, even at deep levels.
+		let out = head_nested(&["-L", "5"]);
+		assert!(out.contains("<7 bytes>"), "binary not summarized: {out}");
+	}
+
+	#[test]
+	fn test_nested_json_is_valid_and_typed() {
+		let fixtures = TestFixtures::new();
+		let output = nail()
+			.args([
+				"head",
+				fixtures.sample_nested_parquet.to_str().unwrap(),
+				"-L",
+				"3",
+				"-f",
+				"json",
+			])
+			.assert()
+			.success()
+			.get_output()
+			.stdout
+			.clone();
+		let parsed: Value =
+			serde_json::from_slice(&output).expect("nested output must be valid JSON");
+		let rows = parsed.as_array().expect("top-level array");
+		let first = &rows[0];
+		// Struct -> JSON object, List<Struct> -> array of objects.
+		assert!(first["meta"].is_object(), "meta should be a JSON object");
+		assert!(
+			first["messages"].is_array(),
+			"messages should be a JSON array"
+		);
+		assert_eq!(first["messages"][0]["role"], "system");
+		// Binary rendered as a string summary, not raw bytes.
+		assert_eq!(first["blob"], "<7 bytes>");
+	}
+
+	#[test]
+	fn test_nested_table_mode_stays_single_line() {
+		// The columnar grid keeps the compact inline form (no tree bullets).
+		let out = head_nested(&["-L", "2", "--table"]);
+		assert!(out.contains("messages"), "header missing: {out}");
+		assert!(
+			!out.contains("StructArray"),
+			"leaked StructArray in table: {out}"
+		);
+	}
+
+	fn strip_ansi(s: &str) -> String {
+		let mut out = String::new();
+		let mut in_esc = false;
+		for ch in s.chars() {
+			if ch == '\x1b' {
+				in_esc = true;
+			} else if in_esc {
+				if ch == 'm' {
+					in_esc = false;
+				}
+			} else {
+				out.push(ch);
+			}
+		}
+		out
+	}
+
+	#[test]
+	fn test_nested_table_no_broken_borders() {
+		// A nested string leaf contains a newline; the grid must flatten it so
+		// every rendered line stays inside the table borders.
+		let out = head_nested(&["-L", "2", "--table"]);
+		let plain = strip_ansi(&out);
+		for line in plain.lines() {
+			let t = line.trim_start();
+			if t.is_empty() {
+				continue;
+			}
+			let ok = t.starts_with(['┌', '├', '└', '│'])
+				|| t.starts_with("cols ")
+				|| t.starts_with("Total records");
+			assert!(
+				ok,
+				"line escaped the table borders: {line:?}\nfull:\n{plain}"
+			);
+		}
+	}
+}

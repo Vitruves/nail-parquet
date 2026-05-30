@@ -32,7 +32,7 @@ const CRATE_NAME: &str = "nail-parquet";
 // Write your release notes using concat! for multiple lines:
 
 const RELEASE_NOTE: &str = concat!(
-	"Release note version 1.7.1:\n",
+	"Release note version 1.8.0:\n",
 	"\n",
 	"[NEW] nail create math functions in -c expressions:\n",
 	"  Scalar: abs, sign, floor, ceil, round, trunc, sqrt, cbrt, exp,\n",
@@ -41,6 +41,9 @@ const RELEASE_NOTE: &str = concat!(
 	"          median, std/stddev, var/variance, stddev_pop, var_pop\n",
 	"  Example: -c \"z=(value-mean(value))/std(value)\"\n",
 	"\n",
+	"[NEW] -L/--level expands nested List/Struct/Map values in head/tail/preview\n",
+	"[FIX] timestamps, decimals, small ints, dictionaries, etc. now show real\n",
+	"      values instead of an Arrow type name (PrimitiveArray<...>, ListArray)\n",
 	"[NEW] -c is repeatable on nail create; commas inside pow(a,b) preserved\n",
 	"[NEW] nail clean: snake_case headers, trim strings, drop empty rows\n",
 	"[NEW] stdin/stdout via '-' on every command (format auto-sniffed)\n",
@@ -50,8 +53,6 @@ const RELEASE_NOTE: &str = concat!(
 	"[FIX] Linux release binaries no longer require glibc >= 2.38\n",
 	"      (now statically linked against musl)\n",
 	"[FIX] Windows stack overflow (STATUS_STACK_OVERFLOW) in many subcommands\n",
-	"[FIX] Clippy lints under Rust 1.95 and formatting drift\n",
-	"\n",
 	"Release artifacts now cover linux-musl (x86_64, aarch64),\n",
 	"macOS (x86_64, aarch64), and windows-msvc, with SHA256SUMS.txt."
 );
