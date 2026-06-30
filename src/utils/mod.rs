@@ -3,6 +3,7 @@ pub mod format;
 pub mod io;
 pub mod output;
 pub mod parquet_utils;
+pub mod predicate;
 pub mod stats;
 pub mod suggest;
 

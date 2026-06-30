@@ -4,9 +4,9 @@ use crate::commands::select::{
 	select_columns_by_pattern, ColumnTypeFilter,
 };
 use crate::error::{NailError, NailResult};
-use crate::utils::column::resolve_column_name;
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
+use crate::utils::predicate::normalize_predicate;
 use clap::Args;
 use datafusion::prelude::*;
 
@@ -28,7 +28,13 @@ pub struct DropArgs {
 	#[arg(
 		short,
 		long,
-		help = "Row numbers/ranges to drop (e.g., 1,3,5-10) OR column conditions (e.g., 'name=John', 'age>25', 'status!=active,score<=50'). Without -o/--output, acts as dry run showing remaining records"
+		help = "Rows to drop, given as EITHER:\n\
+		• row numbers/ranges: '1,3,5-10'\n\
+		• a condition (drops rows where it is true): 'age>25', 'status!=active,score<=50',\n\
+		  '18 < age < 65', \"region IN ('EU','US')\", 'name LIKE \"A%\"', 'score IS NULL'.\n\
+		  Same syntax as 'nail filter -c' (math + SQL, ',' = AND, '|' = OR, case-insensitive\n\
+		  column names). Rows where the condition is false or null are kept.\n\
+		Without -o/--output, acts as a dry run showing the remaining records."
 	)]
 	pub rows: Option<String>,
 
@@ -142,8 +148,12 @@ async fn drop_rows_by_indices(
 }
 
 fn is_column_condition(spec: &str) -> bool {
-	// Check if the spec contains any comparison operators
-	spec.contains('=') || spec.contains('<') || spec.contains('>')
+	// A pure row spec is only digits, commas, dashes and whitespace (e.g.
+	// "1,3,5-10"). Anything else — operators, column names, SQL keywords like
+	// `IN`/`LIKE`/`IS NULL` — is treated as a row condition.
+	!spec
+		.chars()
+		.all(|c| c.is_ascii_digit() || c == ',' || c == '-' || c.is_whitespace())
 }
 
 async fn drop_rows_by_conditions(
@@ -155,76 +165,24 @@ async fn drop_rows_by_conditions(
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 
-	let schema = df.schema().clone().into();
-	let mut filter_conditions = Vec::new();
+	let columns: Vec<String> = df
+		.schema()
+		.fields()
+		.iter()
+		.map(|f| f.name().clone())
+		.collect();
+	let match_sql = normalize_predicate(conditions, &columns)?;
 
-	for condition in conditions.split(',') {
-		let condition = condition.trim();
-		let filter_expr = parse_condition_with_schema(condition, &schema).await?;
-		filter_conditions.push(filter_expr);
-	}
-
-	// Combine all conditions with AND (rows matching ALL conditions will be dropped)
-	let combined_filter = filter_conditions
-		.into_iter()
-		.reduce(|acc, expr| acc.and(expr))
-		.unwrap();
-
-	// Apply NOT to the combined filter to drop matching rows
-	let drop_filter = combined_filter.not();
-
-	let result = ctx.table(table_name).await?.filter(drop_filter)?;
+	// Drop only the rows that actually match (condition is TRUE); rows where the
+	// condition is FALSE or NULL are kept. This is the exact mirror of `filter`.
+	let sql = format!(
+		"SELECT * FROM {} WHERE ({}) IS DISTINCT FROM TRUE",
+		table_name, match_sql
+	);
+	let result = ctx.sql(&sql).await.map_err(|e| {
+		NailError::InvalidArgument(format!("Invalid drop condition '{}': {}", conditions, e))
+	})?;
 	Ok(result)
-}
-
-async fn parse_condition_with_schema(
-	condition: &str,
-	schema: &datafusion::common::DFSchemaRef,
-) -> NailResult<Expr> {
-	let operators = [">=", "<=", "!=", "=", ">", "<"];
-
-	for op in &operators {
-		if let Some(pos) = condition.find(op) {
-			let column_name_input = condition[..pos].trim();
-			let value_str = condition[pos + op.len()..].trim();
-
-			// Use the centralized column resolution utility
-			let actual_column_name = resolve_column_name(schema, column_name_input)?;
-
-			let value_expr = if let Ok(int_val) = value_str.parse::<i64>() {
-				lit(int_val)
-			} else if let Ok(float_val) = value_str.parse::<f64>() {
-				lit(float_val)
-			} else if value_str.eq_ignore_ascii_case("true") {
-				lit(true)
-			} else if value_str.eq_ignore_ascii_case("false") {
-				lit(false)
-			} else {
-				lit(value_str)
-			};
-
-			// Use quoted column name to preserve case sensitivity
-			let column_expr = Expr::Column(datafusion::common::Column::new(
-				None::<String>,
-				&actual_column_name,
-			));
-
-			return Ok(match *op {
-				"=" => column_expr.eq(value_expr),
-				"!=" => column_expr.not_eq(value_expr),
-				">" => column_expr.gt(value_expr),
-				">=" => column_expr.gt_eq(value_expr),
-				"<" => column_expr.lt(value_expr),
-				"<=" => column_expr.lt_eq(value_expr),
-				_ => unreachable!(),
-			});
-		}
-	}
-
-	Err(NailError::InvalidArgument(format!(
-		"Invalid condition: {}",
-		condition
-	)))
 }
 
 #[cfg(test)]
@@ -1020,9 +978,15 @@ mod tests {
 		assert!(is_column_condition("status!=active"));
 		assert!(is_column_condition("value>=50"));
 		assert!(is_column_condition("count<10"));
+		// Conditions without comparison chars must still be recognized.
+		assert!(is_column_condition("status IN ('a','b')"));
+		assert!(is_column_condition("name LIKE 'A%'"));
+		assert!(is_column_condition("score IS NULL"));
+		assert!(is_column_condition("just_text"));
 
+		// Pure row-index specs only contain digits, commas, dashes, spaces.
 		assert!(!is_column_condition("1,2,3"));
 		assert!(!is_column_condition("5-10"));
-		assert!(!is_column_condition("just_text"));
+		assert!(!is_column_condition("1, 3, 5-10"));
 	}
 }

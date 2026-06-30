@@ -7,13 +7,69 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::prelude::*;
 use std::path::Path;
 
-// ANSI color codes
-const RESET: &str = "\x1b[0m";
-const BOLD: &str = "\x1b[1m";
-const DIM: &str = "\x1b[2m";
+use std::sync::atomic::{AtomicBool, Ordering};
 
-const NULL_COLOR: &str = "\x1b[2;37m"; // Dim white
-const BORDER_COLOR: &str = "\x1b[90m"; // Gray
+/// Whether console output should include ANSI color codes. Set once at startup
+/// from the `--color` flag (honoring `NO_COLOR` and TTY detection); defaults to
+/// off so redirected/piped output stays clean if never configured.
+static COLOR_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Enable or disable ANSI colors for all card/table/matrix display output.
+pub fn set_color_enabled(enabled: bool) {
+	COLOR_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+fn colors_on() -> bool {
+	COLOR_ENABLED.load(Ordering::Relaxed)
+}
+
+// ANSI color codes — each returns its escape only when colors are enabled,
+// otherwise an empty string so the same `format!`/`println!` calls produce
+// plain text when piped, redirected, or run with `--color never`/`NO_COLOR`.
+fn reset() -> &'static str {
+	if colors_on() {
+		"\x1b[0m"
+	} else {
+		""
+	}
+}
+fn bold() -> &'static str {
+	if colors_on() {
+		"\x1b[1m"
+	} else {
+		""
+	}
+}
+fn dim() -> &'static str {
+	if colors_on() {
+		"\x1b[2m"
+	} else {
+		""
+	}
+}
+fn null_color() -> &'static str {
+	if colors_on() {
+		"\x1b[2;37m" // Dim white
+	} else {
+		""
+	}
+}
+fn border_color() -> &'static str {
+	if colors_on() {
+		"\x1b[90m" // Gray
+	} else {
+		""
+	}
+}
+
+/// The cycling field color for column `idx`, or empty when colors are disabled.
+fn field_color(idx: usize) -> &'static str {
+	if colors_on() {
+		FIELD_COLORS[idx % FIELD_COLORS.len()]
+	} else {
+		""
+	}
+}
 
 // Bat-style field colors (cycling through different colors for variety)
 const FIELD_COLORS: &[&str] = &[
@@ -124,7 +180,7 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 	let schema = df.schema();
 
 	if batches.is_empty() {
-		println!("{}No data to display{}", DIM, RESET);
+		println!("{}No data to display{}", dim(), reset());
 		return Ok(());
 	}
 
@@ -155,18 +211,18 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 
 			println!(
 				"{}┌{}{}{}{}",
-				BORDER_COLOR,
+				border_color(),
 				"─".repeat(left_dashes),
 				record_text,
 				"─".repeat(right_dashes),
-				RESET
+				reset()
 			);
-			println!("{}│{}", BORDER_COLOR, RESET);
+			println!("{}│{}", border_color(), reset());
 
 			// Print each field as a key-value pair
 			for (col_idx, field) in schema.fields().iter().enumerate() {
 				let column = batch.column(col_idx);
-				let field_color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+				let field_color = field_color(col_idx);
 				let value = format_cell_value_with_field_color(
 					column,
 					row_idx,
@@ -178,15 +234,15 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 				// Format field name with the same color as the value
 				let field_name = format!(
 					"{}{}{:<width$}{}",
-					BOLD,
+					bold(),
 					field_color,
 					field.name(),
-					RESET,
+					reset(),
 					width = field_name_width
 				);
 				// The key/value separator colon is tinted with the field color so
 				// wrapped continuation lines can be traced back to their column.
-				let colon = format!("{}{}:{}", BOLD, field_color, RESET);
+				let colon = format!("{}{}:{}", bold(), field_color, reset());
 
 				// Nested containers (Struct / List-of-containers / Map) expand into
 				// an indented multi-line tree, laid out within the value column so
@@ -196,18 +252,24 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 					if !tree.is_empty() {
 						println!(
 							"{}│{} {} {} {}{}{}",
-							BORDER_COLOR, RESET, field_name, colon, field_color, tree[0], RESET
+							border_color(),
+							reset(),
+							field_name,
+							colon,
+							field_color,
+							tree[0],
+							reset()
 						);
 						for line in &tree[1..] {
 							println!(
 								"{}│{} {:<width$} {} {}{}{}",
-								BORDER_COLOR,
-								RESET,
+								border_color(),
+								reset(),
 								"",
 								colon,
 								field_color,
 								line,
-								RESET,
+								reset(),
 								width = field_name_width
 							);
 						}
@@ -222,18 +284,26 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 				if lines.len() == 1 {
 					println!(
 						"{}│{} {} {} {}",
-						BORDER_COLOR, RESET, field_name, colon, lines[0]
+						border_color(),
+						reset(),
+						field_name,
+						colon,
+						lines[0]
 					);
 				} else {
 					println!(
 						"{}│{} {} {} {}",
-						BORDER_COLOR, RESET, field_name, colon, lines[0]
+						border_color(),
+						reset(),
+						field_name,
+						colon,
+						lines[0]
 					);
 					for line in &lines[1..] {
 						println!(
 							"{}│{} {:<width$} {} {}",
-							BORDER_COLOR,
-							RESET,
+							border_color(),
+							reset(),
 							"",
 							colon,
 							line,
@@ -244,12 +314,12 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 			}
 
 			// Card footer with dynamic width
-			println!("{}│{}", BORDER_COLOR, RESET);
+			println!("{}│{}", border_color(), reset());
 			println!(
 				"{}└{}{}",
-				BORDER_COLOR,
+				border_color(),
 				"─".repeat(terminal_width.saturating_sub(2)),
-				RESET
+				reset()
 			);
 
 			// Add spacing between records
@@ -260,7 +330,7 @@ async fn display_as_table(df: &DataFrame, level: usize) -> NailResult<()> {
 	}
 
 	// Print summary
-	println!("{}Total records: {}{}{}", DIM, BOLD, row_count, RESET);
+	println!("{}Total records: {}{}{}", dim(), bold(), row_count, reset());
 
 	Ok(())
 }
@@ -270,7 +340,7 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 	let schema = df.schema();
 
 	if batches.is_empty() {
-		println!("{}No data to display{}", DIM, RESET);
+		println!("{}No data to display{}", dim(), reset());
 		return Ok(());
 	}
 
@@ -334,7 +404,7 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 	let pages = split_columns_into_pages(&col_widths, terminal_width, row_idx_segment, trailing);
 
 	let total_pages = pages.len();
-	let vbar = format!("{}│{}", BORDER_COLOR, RESET);
+	let vbar = format!("{}│{}", border_color(), reset());
 
 	for (page_idx, page) in pages.iter().enumerate() {
 		// Segment widths for this page = row-idx col + each data col.
@@ -344,28 +414,28 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 			seg_widths.push(col_widths[c]);
 		}
 		let sep_parts: Vec<String> = seg_widths.iter().map(|w| "─".repeat(w + 2)).collect();
-		let top_border = format!("{}┌{}┐{}", BORDER_COLOR, sep_parts.join("┬"), RESET);
-		let mid_border = format!("{}├{}┤{}", BORDER_COLOR, sep_parts.join("┼"), RESET);
-		let bot_border = format!("{}└{}┘{}", BORDER_COLOR, sep_parts.join("┴"), RESET);
+		let top_border = format!("{}┌{}┐{}", border_color(), sep_parts.join("┬"), reset());
+		let mid_border = format!("{}├{}┤{}", border_color(), sep_parts.join("┼"), reset());
+		let bot_border = format!("{}└{}┘{}", border_color(), sep_parts.join("┴"), reset());
 
 		// Header row.
 		let mut header_cells: Vec<String> = Vec::with_capacity(1 + page.len());
 		header_cells.push(format!(
 			" {}{}{:>width$}{} ",
-			BOLD,
-			DIM,
+			bold(),
+			dim(),
 			"#",
-			RESET,
+			reset(),
 			width = row_idx_width
 		));
 		for &col_idx in page {
-			let color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+			let color = field_color(col_idx);
 			header_cells.push(format!(
 				" {}{}{:<width$}{} ",
-				BOLD,
+				bold(),
 				color,
 				truncate_with_ellipsis(fields[col_idx].name(), col_widths[col_idx]),
-				RESET,
+				reset(),
 				width = col_widths[col_idx]
 			));
 		}
@@ -374,13 +444,13 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 		if page_idx > 0 {
 			println!(
 				"{}cols {}–{} of {} (page {}/{}){}",
-				DIM,
+				dim(),
 				page.first().copied().unwrap_or(0) + 1,
 				page.last().copied().unwrap_or(0) + 1,
 				num_cols,
 				page_idx + 1,
 				total_pages,
-				RESET
+				reset()
 			);
 		}
 		println!("{}", top_border);
@@ -393,20 +463,20 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 			let mut cells: Vec<String> = Vec::with_capacity(1 + page.len());
 			cells.push(format!(
 				" {}{:>width$}{} ",
-				DIM,
+				dim(),
 				row_idx + 1,
-				RESET,
+				reset(),
 				width = row_idx_width
 			));
 			for &col_idx in page {
-				let color = FIELD_COLORS[col_idx % FIELD_COLORS.len()];
+				let color = field_color(col_idx);
 				let val = &columns_values[col_idx][row_idx];
 				let cell = if val == "NULL" {
 					format!(
 						" {}{:<width$}{} ",
-						NULL_COLOR,
+						null_color(),
 						val,
-						RESET,
+						reset(),
 						width = col_widths[col_idx]
 					)
 				} else {
@@ -414,7 +484,7 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 						" {}{:<width$}{} ",
 						color,
 						val,
-						RESET,
+						reset(),
 						width = col_widths[col_idx]
 					)
 				};
@@ -428,7 +498,13 @@ async fn display_as_columnar_table(df: &DataFrame, level: usize) -> NailResult<(
 
 	println!(
 		"{}Total records: {}{}{} · columns: {}{}{}",
-		DIM, BOLD, total_rows, RESET, BOLD, num_cols, RESET
+		dim(),
+		bold(),
+		total_rows,
+		reset(),
+		bold(),
+		num_cols,
+		reset()
 	);
 
 	Ok(())
@@ -1016,7 +1092,7 @@ fn wrap_text_with_color(text: &str, max_width: usize, field_color: &str) -> Stri
 
 	if normalized_text.len() <= max_width {
 		// For short text, return with proper color formatting
-		return format!("{}{}{}", field_color, normalized_text, RESET);
+		return format!("{}{}{}", field_color, normalized_text, reset());
 	}
 
 	let mut result = Vec::new();
@@ -1041,7 +1117,7 @@ fn wrap_text_with_color(text: &str, max_width: usize, field_color: &str) -> Stri
 	// Apply color to all lines
 	let colored_lines: Vec<String> = result
 		.iter()
-		.map(|line| format!("{}{}{}", field_color, line, RESET))
+		.map(|line| format!("{}{}{}", field_color, line, reset()))
 		.collect();
 
 	colored_lines.join("\n")
@@ -1113,7 +1189,7 @@ fn format_cell_value_with_field_color(
 	level: usize,
 ) -> String {
 	if column.is_null(row_idx) {
-		format!("{}{}{}", NULL_COLOR, "NULL", RESET)
+		format!("{}{}{}", null_color(), "NULL", reset())
 	} else {
 		let value = match data_type {
 			DataType::Utf8 => {
@@ -1320,7 +1396,7 @@ pub async fn display_correlation_matrix(df: &DataFrame) -> NailResult<()> {
 	let batches = df.clone().collect().await?;
 
 	if batches.is_empty() {
-		println!("{}No correlation data to display{}", DIM, RESET);
+		println!("{}No correlation data to display{}", dim(), reset());
 		return Ok(());
 	}
 
@@ -1405,21 +1481,21 @@ pub async fn display_correlation_matrix(df: &DataFrame) -> NailResult<()> {
 	seg_widths.push(var_col_width);
 	seg_widths.extend(data_col_widths.iter().copied());
 	let sep_parts: Vec<String> = seg_widths.iter().map(|w| "─".repeat(w + 2)).collect();
-	let top_border = format!("{}┌{}┐{}", BORDER_COLOR, sep_parts.join("┬"), RESET);
-	let mid_border = format!("{}├{}┤{}", BORDER_COLOR, sep_parts.join("┼"), RESET);
-	let bot_border = format!("{}└{}┘{}", BORDER_COLOR, sep_parts.join("┴"), RESET);
-	let vbar = format!("{}│{}", BORDER_COLOR, RESET);
+	let top_border = format!("{}┌{}┐{}", border_color(), sep_parts.join("┬"), reset());
+	let mid_border = format!("{}├{}┤{}", border_color(), sep_parts.join("┼"), reset());
+	let bot_border = format!("{}└{}┘{}", border_color(), sep_parts.join("┴"), reset());
+	let vbar = format!("{}│{}", border_color(), reset());
 
 	// Header row: empty top-left cell, then header names right-aligned.
 	let mut header_cells: Vec<String> = vec![format!(" {:<width$} ", "", width = var_col_width)];
 	for (i, h) in headers.iter().enumerate() {
-		let color = FIELD_COLORS[i % FIELD_COLORS.len()];
+		let color = field_color(i);
 		header_cells.push(format!(
 			" {}{}{:>width$}{} ",
-			BOLD,
+			bold(),
 			color,
 			h,
-			RESET,
+			reset(),
 			width = data_col_widths[i]
 		));
 	}
@@ -1430,24 +1506,24 @@ pub async fn display_correlation_matrix(df: &DataFrame) -> NailResult<()> {
 	println!("{}", mid_border);
 
 	for (r, row_name) in row_names.iter().enumerate() {
-		let row_color = FIELD_COLORS[r % FIELD_COLORS.len()];
+		let row_color = field_color(r);
 		let mut cells: Vec<String> = Vec::with_capacity(1 + data_col_widths.len());
 		cells.push(format!(
 			" {}{}{:<width$}{} ",
-			BOLD,
+			bold(),
 			row_color,
 			row_name,
-			RESET,
+			reset(),
 			width = var_col_width
 		));
 		for (c, w) in data_col_widths.iter().enumerate() {
 			let s = &cell_strings[r][c];
 			let cell = if s == "NULL" {
-				format!(" {}{:>width$}{} ", NULL_COLOR, s, RESET, width = w)
+				format!(" {}{:>width$}{} ", null_color(), s, reset(), width = w)
 			} else {
 				let val = values[r][c].unwrap_or(0.0);
 				let color = corr_color(val, r == c);
-				format!(" {}{:>width$}{} ", color, s, RESET, width = w)
+				format!(" {}{:>width$}{} ", color, s, reset(), width = w)
 			};
 			cells.push(cell);
 		}
@@ -1459,6 +1535,9 @@ pub async fn display_correlation_matrix(df: &DataFrame) -> NailResult<()> {
 }
 
 fn corr_color(val: f64, is_diagonal: bool) -> &'static str {
+	if !colors_on() {
+		return "";
+	}
 	if is_diagonal {
 		return "\x1b[1;37m"; // bold white for diagonal (=1.0)
 	}

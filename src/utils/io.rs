@@ -14,11 +14,62 @@ use datafusion::prelude::{
 	SessionContext,
 };
 use futures::StreamExt;
+use parquet::basic::Compression;
 use rust_xlsxwriter::{Format, Workbook};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+/// Parquet compression codec selectable via the global `--compression` flag and
+/// reused by `optimize`. The level applies to gzip/zstd/brotli; snappy ignores it.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompressionType {
+	Snappy,
+	Gzip,
+	Zstd,
+	Brotli,
+}
+
+impl CompressionType {
+	pub fn to_parquet_compression(self, level: i32) -> Compression {
+		use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+		match self {
+			CompressionType::Snappy => Compression::SNAPPY,
+			CompressionType::Gzip => {
+				let l = level.clamp(1, 9) as u32;
+				Compression::GZIP(GzipLevel::try_new(l).unwrap_or_default())
+			}
+			CompressionType::Zstd => {
+				let l = level.clamp(1, 22);
+				Compression::ZSTD(ZstdLevel::try_new(l).unwrap_or_default())
+			}
+			CompressionType::Brotli => {
+				let l = level.clamp(0, 11) as u32;
+				Compression::BROTLI(BrotliLevel::try_new(l).unwrap_or_default())
+			}
+		}
+	}
+}
+
+/// Process-wide Parquet compression for output files, configured once at startup
+/// from the global `--compression`/`--compression-level` flags. Defaults to
+/// SNAPPY when unset, preserving prior behaviour.
+static WRITE_COMPRESSION: OnceLock<Compression> = OnceLock::new();
+
+/// Set the compression codec used by every Parquet write path. Call once at
+/// startup before any command runs.
+pub fn set_write_compression(compression: Compression) {
+	let _ = WRITE_COMPRESSION.set(compression);
+}
+
+/// The configured Parquet compression, or SNAPPY when `--compression` was not given.
+pub fn configured_write_compression() -> Compression {
+	WRITE_COMPRESSION
+		.get()
+		.copied()
+		.unwrap_or(Compression::SNAPPY)
+}
 
 /// Returns true when the path is the conventional stdio marker `-`.
 pub fn is_stdio(path: &Path) -> bool {
@@ -337,8 +388,10 @@ pub async fn write_data(
 	format: Option<&FileFormat>,
 ) -> NailResult<()> {
 	if is_stdio(path) {
-		// Stdout: default to CSV when no explicit format is given (most pipe-friendly).
-		let out_format = format.cloned().unwrap_or(FileFormat::Csv);
+		// Stdout: default to Parquet when no explicit format is given. It is the
+		// only pipe-friendly format that preserves the full schema (types, nested
+		// list/struct/map columns) losslessly when chaining `nail ... -o - | nail -`.
+		let out_format = format.cloned().unwrap_or(FileFormat::Parquet);
 		return write_data_to_stdout(df, &out_format).await;
 	}
 
@@ -385,12 +438,11 @@ async fn write_parquet_to_writer<W: Write + Send>(
 	writer: W,
 ) -> NailResult<()> {
 	use parquet::arrow::ArrowWriter;
-	use parquet::basic::Compression;
 	use parquet::file::properties::WriterProperties;
 
 	let arrow_schema = Arc::new(df.schema().as_arrow().clone());
 	let props = WriterProperties::builder()
-		.set_compression(Compression::SNAPPY)
+		.set_compression(configured_write_compression())
 		.build();
 	let mut w = ArrowWriter::try_new(writer, arrow_schema, Some(props)).map_err(|e| {
 		NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))
@@ -445,13 +497,12 @@ async fn write_json_to_writer<W: Write>(df: &DataFusionDataFrame, writer: W) -> 
 
 async fn write_parquet_streaming(df: &DataFusionDataFrame, path: &Path) -> NailResult<()> {
 	use parquet::arrow::ArrowWriter;
-	use parquet::basic::Compression;
 	use parquet::file::properties::WriterProperties;
 
 	let arrow_schema = Arc::new(df.schema().as_arrow().clone());
 	let file = File::create(path).map_err(NailError::Io)?;
 	let props = WriterProperties::builder()
-		.set_compression(Compression::SNAPPY)
+		.set_compression(configured_write_compression())
 		.build();
 	let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).map_err(|e| {
 		NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))

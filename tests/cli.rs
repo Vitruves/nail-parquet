@@ -332,6 +332,169 @@ mod manipulation_tests {
 	}
 
 	#[tokio::test]
+	async fn test_filter_chained_range() {
+		// Math-style range: 2 < id < 5 keeps ids 3 and 4.
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("range.parquet");
+		nail()
+			.args([
+				"filter",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"2 < id < 5",
+				"-o",
+				out.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out).await, 2);
+	}
+
+	#[tokio::test]
+	async fn test_filter_case_insensitive_column_and_unquoted_value() {
+		// Column referenced as CATEGORY (real name `category`); value A unquoted.
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("ci.parquet");
+		nail()
+			.args([
+				"filter",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"CATEGORY=A",
+				"-o",
+				out.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out).await, 2);
+	}
+
+	#[tokio::test]
+	async fn test_filter_sql_operators() {
+		let fixtures = TestFixtures::new();
+
+		// IN list: categories A and C -> ids 1,3,5.
+		let out_in = fixtures.get_output_path("in.parquet");
+		nail()
+			.args([
+				"filter",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"category IN ('A','C')",
+				"-o",
+				out_in.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out_in).await, 3);
+
+		// BETWEEN combined with OR via '|': value 100..300 OR category C.
+		let out_or = fixtures.get_output_path("between_or.parquet");
+		nail()
+			.args([
+				"filter",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"value BETWEEN 100 AND 300|category=C",
+				"-o",
+				out_or.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out_or).await, 4);
+
+		// LIKE pattern: names starting with A -> Alice only.
+		let out_like = fixtures.get_output_path("like.parquet");
+		nail()
+			.args([
+				"filter",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"name LIKE 'A%'",
+				"-o",
+				out_like.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out_like).await, 1);
+	}
+
+	#[tokio::test]
+	async fn test_drop_rows_by_condition_mirrors_filter() {
+		// drop is the mirror of filter: dropping category=A leaves ids 2,4,5.
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("drop_cond.parquet");
+		nail()
+			.args([
+				"drop",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-r",
+				"category=A",
+				"-o",
+				out.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out).await, 3);
+	}
+
+	#[tokio::test]
+	async fn test_drop_rows_chained_range_and_indices_both_work() {
+		let fixtures = TestFixtures::new();
+
+		// Condition form: drop 2 < id < 5 (ids 3,4) -> 3 remain.
+		let out_cond = fixtures.get_output_path("drop_range.parquet");
+		nail()
+			.args([
+				"drop",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-r",
+				"2 < id < 5",
+				"-o",
+				out_cond.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out_cond).await, 3);
+
+		// Plain row indices must still be treated as indices, not a condition.
+		let out_idx = fixtures.get_output_path("drop_idx.parquet");
+		nail()
+			.args([
+				"drop",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-r",
+				"1,2",
+				"-o",
+				out_idx.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out_idx).await, 3);
+	}
+
+	#[tokio::test]
+	async fn test_create_row_filter_uses_unified_engine() {
+		// create -r now supports chained ranges + case-insensitive columns.
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("create_rf.parquet");
+		nail()
+			.args([
+				"create",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-r",
+				"2 < ID < 5",
+				"-c",
+				"ten=id*10",
+				"-o",
+				out.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&out).await, 2);
+	}
+
+	#[tokio::test]
 	async fn test_filter_by_row_property() {
 		let fixtures = TestFixtures::new();
 		let out_rows = fixtures.get_output_path("filtered_rows.parquet");
@@ -631,6 +794,96 @@ mod transformation_tests {
 			let row: Value = serde_json::from_str(line).unwrap();
 			assert!(row["strat_key"].is_string());
 		}
+	}
+
+	// Regression test for the schema-leak bug: seeded `sample` used to leak an
+	// internal `rn` (ROW_NUMBER) column into its output, silently changing the
+	// schema and breaking a subsequent `sample` on that output with
+	// "qualified field name temp_table.rn and unqualified field name rn ...".
+	#[tokio::test]
+	async fn test_sample_seeded_preserves_schema_and_chains() {
+		async fn column_names(path: &std::path::Path) -> Vec<String> {
+			let ctx = SessionContext::new();
+			let df = ctx
+				.read_parquet(path.to_str().unwrap(), ParquetReadOptions::default())
+				.await
+				.unwrap();
+			df.schema()
+				.fields()
+				.iter()
+				.map(|f| f.name().clone())
+				.collect()
+		}
+
+		let fixtures = TestFixtures::new();
+		let expected: Vec<String> = vec![
+			"id".to_string(),
+			"name".to_string(),
+			"value".to_string(),
+			"category".to_string(),
+		];
+
+		// First seeded sample must NOT add an `rn` / internal helper column.
+		let out1 = fixtures.get_output_path("sample_chain_1.parquet");
+		nail()
+			.args([
+				"sample",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--random",
+				"42",
+				"-n",
+				"3",
+				"-o",
+				out1.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		let cols1 = column_names(&out1).await;
+		assert_eq!(cols1, expected, "seeded sample changed the output schema");
+		assert!(
+			!cols1.iter().any(|c| c == "rn" || c == "__nail_row_id"),
+			"internal row-number column leaked into output: {cols1:?}"
+		);
+		assert_eq!(get_row_count(&out1).await, 3);
+
+		// Chaining another seeded sample on that output used to error out.
+		let out2 = fixtures.get_output_path("sample_chain_2.parquet");
+		nail()
+			.args([
+				"sample",
+				out1.to_str().unwrap(),
+				"--random",
+				"42",
+				"-n",
+				"1",
+				"-o",
+				out2.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(column_names(&out2).await, expected);
+		assert_eq!(get_row_count(&out2).await, 1);
+
+		// Same seed must produce byte-identical output (reproducible sampling).
+		let repro = fixtures.get_output_path("sample_chain_1b.parquet");
+		nail()
+			.args([
+				"sample",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--random",
+				"42",
+				"-n",
+				"3",
+				"-o",
+				repro.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(
+			fs::read(&out1).unwrap(),
+			fs::read(&repro).unwrap(),
+			"seeded sample is not reproducible across runs"
+		);
 	}
 
 	#[tokio::test]
@@ -1710,6 +1963,285 @@ mod new_command_tests {
 			])
 			.assert()
 			.success();
+	}
+
+	#[test]
+	fn test_pivot_spreads_into_columns() {
+		// Regression: pivot must spread distinct pivot-key values into separate
+		// columns. It previously returned a long-format GROUP BY (the pivot
+		// column was left intact and no spread happened).
+		let fixtures = TestFixtures::new();
+
+		let assert = nail()
+			.args([
+				"pivot",
+				fixtures.sample_for_pivot_parquet.to_str().unwrap(),
+				"-i",
+				"region",
+				"-c",
+				"product",
+				"-l",
+				"sales",
+				"--agg",
+				"sum",
+				"-o",
+				"-",
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+		// One column per distinct product; original pivot column is gone.
+		assert_eq!(out.lines().next().unwrap(), "region,Gadget,Tool,Widget");
+		assert!(
+			!out.lines().next().unwrap().contains("product"),
+			"pivot column must be spread away, got: {out}"
+		);
+		// 4 regions => 4 data rows + 1 header.
+		assert_eq!(out.lines().count(), 5);
+		// North: Widget=1000, Gadget=1500, Tool=600 (substring-robust to float fmt).
+		let north = out.lines().find(|l| l.starts_with("North,")).unwrap();
+		assert!(north.contains("1500"), "North/Gadget sum: {north}");
+		assert!(north.contains("600"), "North/Tool sum: {north}");
+		assert!(north.contains("1000"), "North/Widget sum: {north}");
+	}
+
+	#[test]
+	fn test_pivot_fill_value_for_missing_cells() {
+		// A (region, product) pair that doesn't exist must take the fill value.
+		let fixtures = TestFixtures::new();
+		let src = fixtures.get_output_path("pivot_fill.csv");
+		// "C" only appears for r1, so r2/C is a missing cell.
+		std::fs::write(&src, "grp,key,v\nr1,A,10\nr1,C,5\nr2,A,7\n").unwrap();
+
+		let assert = nail()
+			.args([
+				"pivot",
+				src.to_str().unwrap(),
+				"-i",
+				"grp",
+				"-c",
+				"key",
+				"-l",
+				"v",
+				"--fill",
+				"0",
+				"-o",
+				"-",
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+		assert_eq!(out.lines().next().unwrap(), "grp,A,C");
+		// r2 has no C -> filled with 0, not left empty.
+		let r2 = out.lines().find(|l| l.starts_with("r2,")).unwrap();
+		assert_eq!(r2, "r2,7,0");
+	}
+
+	#[test]
+	fn test_diff_keyed_unchanged_and_changes_only() {
+		// Regression: keyed diff never compared non-key values, so it labelled
+		// every matched row MODIFIED and never emitted UNCHANGED; --changes-only
+		// was therefore a no-op.
+		let fixtures = TestFixtures::new();
+		let left = fixtures.get_output_path("diff_left.csv");
+		let right = fixtures.get_output_path("diff_right.csv");
+		std::fs::write(&left, "id,val\n1,a\n2,b\n3,c\n").unwrap();
+		std::fs::write(&right, "id,val\n1,a\n2,B\n4,d\n").unwrap();
+
+		// Full keyed diff: id 1 is identical and must be UNCHANGED.
+		let assert = nail()
+			.args([
+				"diff",
+				left.to_str().unwrap(),
+				"-c",
+				right.to_str().unwrap(),
+				"-k",
+				"id",
+				"-o",
+				"-",
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+		assert!(
+			out.contains("UNCHANGED"),
+			"identical key row should be UNCHANGED: {out}"
+		);
+		assert!(out.contains("MODIFIED"));
+		assert!(out.contains("ADDED"));
+		assert!(out.contains("REMOVED"));
+
+		// --changes-only must drop the UNCHANGED row.
+		let assert2 = nail()
+			.args([
+				"diff",
+				left.to_str().unwrap(),
+				"-c",
+				right.to_str().unwrap(),
+				"-k",
+				"id",
+				"--changes-only",
+				"-o",
+				"-",
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let out2 = String::from_utf8(assert2.get_output().stdout.clone()).unwrap();
+		assert!(
+			!out2.contains("UNCHANGED"),
+			"--changes-only must drop unchanged rows: {out2}"
+		);
+		// 3 changed rows (MODIFIED/ADDED/REMOVED) + header.
+		assert_eq!(out2.lines().count(), 4);
+	}
+
+	#[test]
+	fn test_optimize_applies_requested_compression() {
+		// Regression: optimize built WriterProperties but wrote with DataFusion
+		// defaults, so --compression was silently ignored (always SNAPPY).
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("opt_zstd.parquet");
+		nail()
+			.args([
+				"optimize",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"--compression",
+				"zstd",
+				"-o",
+				out.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+
+		// The written file must actually use ZSTD, not SNAPPY/default.
+		nail()
+			.args(["metadata", out.to_str().unwrap(), "--show-compression"])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("zstd").or(predicate::str::contains("ZSTD")));
+	}
+
+	// TRANSPOSE COMMAND TESTS
+	#[test]
+	fn test_transpose_basic() {
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("transposed.csv");
+		nail()
+			.args([
+				"transpose",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o",
+				out.to_str().unwrap(),
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let content = fs::read_to_string(out).unwrap();
+		// 5 input rows -> row_1..row_5 headers; 4 input columns -> 4 body rows.
+		let header = content.lines().next().unwrap();
+		assert_eq!(header, "column,row_1,row_2,row_3,row_4,row_5");
+		assert_eq!(content.trim().lines().count(), 5); // header + 4 columns
+	}
+
+	#[test]
+	fn test_transpose_header_column() {
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("transposed_h.csv");
+		nail()
+			.args([
+				"transpose",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-H",
+				"name",
+				"-o",
+				out.to_str().unwrap(),
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let content = fs::read_to_string(out).unwrap();
+		let header = content.lines().next().unwrap();
+		// `name` values (Alice..Eve) become the new column headers.
+		assert!(header.contains("Alice"));
+		assert!(header.contains("Eve"));
+		// `name` is consumed as the header, leaving id/value/category as body rows.
+		assert_eq!(content.trim().lines().count(), 4);
+	}
+
+	// UNIQUE COMMAND TESTS
+	#[test]
+	fn test_unique_distinct_column() {
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("unique.csv");
+		nail()
+			.args([
+				"unique",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"category",
+				"--sort",
+				"-o",
+				out.to_str().unwrap(),
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let content = fs::read_to_string(out).unwrap();
+		// categories A,B,C -> 3 distinct values + header.
+		assert_eq!(content.trim().lines().count(), 4);
+	}
+
+	#[test]
+	fn test_unique_value_counts() {
+		let fixtures = TestFixtures::new();
+		let out = fixtures.get_output_path("vc.csv");
+		nail()
+			.args([
+				"unique",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"category",
+				"--count",
+				"-o",
+				out.to_str().unwrap(),
+				"-f",
+				"csv",
+			])
+			.assert()
+			.success();
+		let content = fs::read_to_string(out).unwrap();
+		let header = content.lines().next().unwrap();
+		assert!(header.contains("count"));
+		// Sorted by count desc: A and B each occur twice, so the top count is 2.
+		let first = content.lines().nth(1).unwrap();
+		assert!(first.ends_with(",2"));
+	}
+
+	#[test]
+	fn test_unique_invalid_column() {
+		let fixtures = TestFixtures::new();
+		nail()
+			.args([
+				"unique",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-c",
+				"nope",
+			])
+			.assert()
+			.failure()
+			.stderr(predicate::str::contains("Column 'nope' not found"));
 	}
 
 	#[test]

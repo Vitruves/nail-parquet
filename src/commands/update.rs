@@ -32,29 +32,28 @@ const CRATE_NAME: &str = "nail-parquet";
 // Write your release notes using concat! for multiple lines:
 
 const RELEASE_NOTE: &str = concat!(
-	"Release note version 1.8.0:\n",
+	"Release note version 1.9.0:\n",
 	"\n",
-	"[NEW] nail create math functions in -c expressions:\n",
-	"  Scalar: abs, sign, floor, ceil, round, trunc, sqrt, cbrt, exp,\n",
-	"          ln, log, log10, log2, pow, sin/cos/tan, asin/acos/atan, atan2\n",
-	"  Aggregate (broadcast via OVER ()): mean, sum, min, max, count,\n",
-	"          median, std/stddev, var/variance, stddev_pop, var_pop\n",
-	"  Example: -c \"z=(value-mean(value))/std(value)\"\n",
-	"\n",
-	"[NEW] -L/--level expands nested List/Struct/Map values in head/tail/preview\n",
-	"[FIX] timestamps, decimals, small ints, dictionaries, etc. now show real\n",
-	"      values instead of an Arrow type name (PrimitiveArray<...>, ListArray)\n",
-	"[NEW] -c is repeatable on nail create; commas inside pow(a,b) preserved\n",
-	"[NEW] nail clean: snake_case headers, trim strings, drop empty rows\n",
-	"[NEW] stdin/stdout via '-' on every command (format auto-sniffed)\n",
-	"[NEW] \"Did you mean ...?\" suggestions on column-not-found errors\n",
-	"[NEW] Examples shown in every subcommand's --help\n",
-	"\n",
-	"[FIX] Linux release binaries no longer require glibc >= 2.38\n",
-	"      (now statically linked against musl)\n",
-	"[FIX] Windows stack overflow (STATUS_STACK_OVERFLOW) in many subcommands\n",
-	"Release artifacts now cover linux-musl (x86_64, aarch64),\n",
-	"macOS (x86_64, aarch64), and windows-msvc, with SHA256SUMS.txt."
+	"[NEW] transpose command: flip rows and columns (--header-column to use a\n",
+	"      column's values as the new headers)\n",
+	"[NEW] unique command: list distinct rows or per-column value counts\n",
+	"      (-c cols, --count for value counts, --sort)\n",
+	"[NEW] Global --compression/--compression-level: every Parquet write can now\n",
+	"      emit snappy/gzip/zstd/brotli, not just optimize\n",
+	"[NEW] Global --color <auto|always|never>; honors NO_COLOR and TTY detection,\n",
+	"      so redirected/piped output is no longer littered with ANSI codes\n",
+	"[CHG] metadata's compression-info toggle moved to --show-compression\n",
+	"      (--compression is now the global output codec flag)\n",
+	"[NEW] Unified condition syntax for filter/drop/create: chained ranges\n",
+	"      (18 < age < 65), BETWEEN/IN/LIKE/IS NULL/CASE, column-vs-column,\n",
+	"      == alias, case-insensitive names; , = AND, | = OR\n",
+	"[NEW] -o - now defaults to Parquet (lossless schema across pipes;\n",
+	"      use -f csv/json to override)\n",
+	"[FIX] No more 'Broken pipe' panic when a consumer (| head) exits early\n",
+	"[FIX] sample --method random no longer leaks an internal rn column\n",
+	"[FIX] optimize now honors --compression/--compression-level/--dictionary\n",
+	"[FIX] diff compares values (real UNCHANGED/MODIFIED; --changes-only works)\n",
+	"[FIX] pivot produces a real spread pivot table and honors --fill"
 );
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -115,7 +114,13 @@ pub async fn execute(args: UpdateArgs) -> NailResult<()> {
 			latest_version.bright_green().bold()
 		);
 		println!();
-		println!("{}", "To update, run:".bright_blue());
+		println!("{}", "To update, run one of:".bright_blue());
+		println!(
+			"  {}",
+			"curl -fsSL https://raw.githubusercontent.com/Vitruves/nail-parquet/main/install.sh | sh"
+				.bright_white()
+				.bold()
+		);
 		println!(
 			"  {}",
 			format!("cargo install {}", CRATE_NAME)

@@ -1904,7 +1904,7 @@ dependencies = [
 
 [[package]]
 name = "nail-parquet"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -1918,6 +1918,7 @@ dependencies = [
  "crossterm",
  "datafusion",
  "futures",
+ "libc",
  "num_cpus",
  "parquet",
  "predicates",

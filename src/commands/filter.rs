@@ -1,15 +1,18 @@
 use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
-use crate::utils::column::resolve_column_name;
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
+use crate::utils::predicate::normalize_predicate;
 use clap::Args;
 use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
 #[command(after_help = "Examples:
   nail filter data.parquet -c \"age>=18,status=active\"
-  nail filter sales.csv -c \"region=EU|region=US\" -o filtered.csv")]
+  nail filter people.parquet -c \"18 < age < 65\"          # math-style range
+  nail filter sales.csv     -c \"region IN ('EU','US')\"    # SQL operators
+  nail filter users.parquet -c \"name LIKE 'A%' AND score IS NOT NULL\"
+  nail filter sales.csv     -c \"region=EU|region=US\" -o filtered.csv")]
 pub struct FilterArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
@@ -17,22 +20,23 @@ pub struct FilterArgs {
 	#[arg(
 		short,
 		long,
-		help = "Column filter conditions.\n\
-		Separators (AND binds tighter than OR):\n\
-		• ',' — AND between conditions\n\
-		• '|' — OR between conditions\n\
-		Supported operators:\n\
-		• = (equals): 'status=active'\n\
-		• != (not equals): 'status!=inactive'\n\
-		• > (greater than): 'age>25'\n\
-		• >= (greater or equal): 'score>=80'\n\
-		• < (less than): 'salary<50000'\n\
-		• <= (less or equal): 'price<=100'\n\
+		help = "Row condition. Mix plain math and SQL however you like; column\n\
+		names are matched case-insensitively.\n\
+		Comparisons: =  ==  !=  <>  <  <=  >  >=\n\
+		Ranges (math style):  '18 < age < 65'  '0 <= score <= 100'  '8 > x > 4'\n\
+		Combine conditions:\n\
+		• ',' or 'AND' — all must hold:  'age>=18,status=active'\n\
+		• '|'  or 'OR' — any may hold:   'region=EU|region=US'\n\
+		  (',' / AND binds tighter than '|' / OR)\n\
+		SQL operators also work: BETWEEN a AND b, IN (..), LIKE/ILIKE,\n\
+		IS NULL, IS NOT NULL, NOT (..), CASE WHEN ..\n\
+		Quote text values with spaces or capitals: name='New York'\n\
 		Examples:\n\
-		• Single: 'age>25'\n\
-		• AND: 'age>=18,salary<50000,status=active'\n\
-		• OR: 'status=active|status=pending'\n\
-		• Mixed: 'age>=18,salary<50000|role=admin'  => (age>=18 AND salary<50000) OR role=admin"
+		• 'age>25'\n\
+		• 'age>=18,salary<50000,status=active'\n\
+		• 'status=active|status=pending'\n\
+		• 'age BETWEEN 18 AND 65 AND name LIKE \"A%\"'\n\
+		• 'age>=18,salary<50000|role=admin'  => (age>=18 AND salary<50000) OR role=admin"
 	)]
 	pub columns: Option<String>,
 
@@ -85,89 +89,19 @@ async fn apply_column_filters(
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
 
-	let schema = df.schema().clone().into();
-	let combined_filter = parse_filter_expression(conditions, &schema).await?;
+	let columns: Vec<String> = df
+		.schema()
+		.fields()
+		.iter()
+		.map(|f| f.name().clone())
+		.collect();
+	let where_sql = normalize_predicate(conditions, &columns)?;
 
-	let result = ctx.table(table_name).await?.filter(combined_filter)?;
+	let sql = format!("SELECT * FROM {} WHERE {}", table_name, where_sql);
+	let result = ctx.sql(&sql).await.map_err(|e| {
+		NailError::InvalidArgument(format!("Invalid filter condition '{}': {}", conditions, e))
+	})?;
 	Ok(result)
-}
-
-/// Parse a filter expression with AND (',') and OR ('|') separators.
-/// AND binds tighter than OR, so `a=1,b=2|c=3` becomes `(a=1 AND b=2) OR c=3`.
-async fn parse_filter_expression(
-	expression: &str,
-	schema: &datafusion::common::DFSchemaRef,
-) -> NailResult<Expr> {
-	let mut or_groups = Vec::new();
-	for or_group in expression.split('|') {
-		let or_group = or_group.trim();
-		if or_group.is_empty() {
-			return Err(NailError::InvalidArgument(format!(
-				"Empty OR group in: {}",
-				expression
-			)));
-		}
-		let mut and_exprs = Vec::new();
-		for condition in or_group.split(',') {
-			let condition = condition.trim();
-			if condition.is_empty() {
-				return Err(NailError::InvalidArgument(format!(
-					"Empty condition in: {}",
-					expression
-				)));
-			}
-			and_exprs.push(parse_condition_with_schema(condition, schema).await?);
-		}
-		let and_combined = and_exprs.into_iter().reduce(|acc, e| acc.and(e)).unwrap();
-		or_groups.push(and_combined);
-	}
-	Ok(or_groups.into_iter().reduce(|acc, e| acc.or(e)).unwrap())
-}
-
-async fn parse_condition_with_schema(
-	condition: &str,
-	schema: &datafusion::common::DFSchemaRef,
-) -> NailResult<Expr> {
-	let operators = [">=", "<=", "!=", "=", ">", "<"];
-
-	for op in &operators {
-		if let Some(pos) = condition.find(op) {
-			let column_name_input = condition[..pos].trim();
-			let value_str = condition[pos + op.len()..].trim();
-
-			// Use the centralized column resolution utility
-			let actual_column_name = resolve_column_name(schema, column_name_input)?;
-
-			let value_expr = if let Ok(int_val) = value_str.parse::<i64>() {
-				lit(int_val)
-			} else if let Ok(float_val) = value_str.parse::<f64>() {
-				lit(float_val)
-			} else {
-				lit(value_str)
-			};
-
-			// Use quoted column name to preserve case sensitivity
-			let column_expr = Expr::Column(datafusion::common::Column::new(
-				None::<String>,
-				&actual_column_name,
-			));
-
-			return Ok(match *op {
-				"=" => column_expr.eq(value_expr),
-				"!=" => column_expr.not_eq(value_expr),
-				">" => column_expr.gt(value_expr),
-				">=" => column_expr.gt_eq(value_expr),
-				"<" => column_expr.lt(value_expr),
-				"<=" => column_expr.lt_eq(value_expr),
-				_ => unreachable!(),
-			});
-		}
-	}
-
-	Err(NailError::InvalidArgument(format!(
-		"Invalid condition: {}",
-		condition
-	)))
 }
 
 async fn apply_row_filter(

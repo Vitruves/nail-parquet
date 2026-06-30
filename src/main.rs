@@ -9,18 +9,54 @@ use error::NailResult;
 
 #[tokio::main]
 async fn main() {
+	reset_sigpipe();
 	if let Err(e) = run().await {
 		eprintln!("Error: {}", e);
 		std::process::exit(1);
 	}
 }
 
+/// Restore the default `SIGPIPE` disposition on Unix.
+///
+/// Rust installs `SIG_IGN` for `SIGPIPE` at startup, so writing to a pipe whose
+/// reader has gone away (`nail ... | head`, an early-exiting consumer, etc.)
+/// surfaces as an `EPIPE` error inside the stdout print machinery, which then
+/// panics with "failed printing to stdout: Broken pipe". Resetting to `SIG_DFL`
+/// makes the process terminate quietly via the signal — the conventional Unix
+/// behaviour for CLI tools in a pipeline.
+#[cfg(unix)]
+fn reset_sigpipe() {
+	// SAFETY: resetting a signal handler to its default disposition is sound;
+	// we touch no shared state and call this once before any threads do I/O.
+	unsafe {
+		libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+	}
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 async fn run() -> NailResult<()> {
 	let cli = Cli::parse_with_width();
+
+	// Resolve global display/output settings once, before dispatch.
+	utils::format::set_color_enabled(cli.color.resolve());
+	if !(1..=9).contains(&cli.compression_level) {
+		return Err(error::NailError::InvalidArgument(
+			"Compression level must be between 1 and 9".to_string(),
+		));
+	}
+	if let Some(codec) = cli.compression {
+		utils::io::set_write_compression(
+			codec.to_parquet_compression(cli.compression_level as i32),
+		);
+	}
 
 	match cli.command {
 		commands::Commands::Head(args) => commands::head::execute(args).await,
 		commands::Commands::Tail(args) => commands::tail::execute(args).await,
+		commands::Commands::Transpose(args) => commands::transpose::execute(args).await,
+		commands::Commands::Unique(args) => commands::unique::execute(args).await,
 		commands::Commands::Preview(args) => commands::preview::execute(args).await,
 		commands::Commands::Headers(args) => commands::headers::execute(args).await,
 		commands::Commands::Schema(args) => commands::schema::execute(args).await,

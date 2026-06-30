@@ -4,7 +4,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "nail")]
 #[command(about = "A fast parquet utility written in Rust")]
-#[command(version = "1.8.0")]
+#[command(version = "1.9.0")]
 #[command(author = "Johan HG Natter")]
 #[command(color = ColorChoice::Auto)]
 #[command(styles = clap::builder::Styles::styled()
@@ -19,6 +19,56 @@ use std::path::PathBuf;
 pub struct Cli {
 	#[command(subcommand)]
 	pub command: crate::commands::Commands,
+
+	#[arg(
+		long,
+		global = true,
+		value_enum,
+		help = "Parquet compression codec for output files [default: snappy]"
+	)]
+	pub compression: Option<crate::utils::io::CompressionType>,
+
+	#[arg(
+		long,
+		global = true,
+		default_value = "6",
+		help = "Compression level for gzip/zstd/brotli (1-9)"
+	)]
+	pub compression_level: u32,
+
+	#[arg(
+		long,
+		global = true,
+		value_enum,
+		default_value = "auto",
+		help = "When to colorize console output"
+	)]
+	pub color: ColorWhen,
+}
+
+/// Controls ANSI color usage for console (card/table) output.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ColorWhen {
+	/// Colorize only when stdout is a terminal and `NO_COLOR` is unset.
+	Auto,
+	/// Always emit ANSI color codes.
+	Always,
+	/// Never emit ANSI color codes.
+	Never,
+}
+
+impl ColorWhen {
+	/// Resolve whether colors should be emitted, honoring `NO_COLOR` and TTY detection.
+	pub fn resolve(self) -> bool {
+		use std::io::IsTerminal;
+		match self {
+			ColorWhen::Always => true,
+			ColorWhen::Never => false,
+			ColorWhen::Auto => {
+				std::env::var_os("NO_COLOR").is_none() && std::io::stdout().is_terminal()
+			}
+		}
+	}
 }
 
 impl Cli {

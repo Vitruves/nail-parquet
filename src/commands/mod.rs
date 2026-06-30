@@ -35,6 +35,8 @@ pub mod id;
 pub mod pivot;
 pub mod sample;
 pub mod shuffle;
+pub mod transpose;
+pub mod unique;
 
 // Data Combination
 pub mod append;
@@ -155,6 +157,12 @@ pub enum Commands {
 
 	#[command(about = "Display last N rows")]
 	Tail(tail::TailArgs),
+
+	#[command(about = "Transpose rows and columns")]
+	Transpose(transpose::TransposeArgs),
+
+	#[command(about = "List distinct rows or per-column value counts")]
+	Unique(unique::UniqueArgs),
 
 	#[command(about = "Check for newer versions")]
 	Update(update::UpdateArgs),

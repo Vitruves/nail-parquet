@@ -61,20 +61,79 @@ TOTAL_TESTS=0
 PASSED_TESTS=0
 FAILED_TESTS=0
 
-# Function to run a test
+# Function to run a test (checks exit code only)
 run_test() {
     local test_name="$1"
     local command="$2"
-    
+
     TOTAL_TESTS=$((TOTAL_TESTS + 1))
     log "Running test: $test_name"
-    
+
     if eval "$command" > /dev/null 2>&1; then
         success "$test_name"
         PASSED_TESTS=$((PASSED_TESTS + 1))
     else
         error "$test_name"
         FAILED_TESTS=$((FAILED_TESTS + 1))
+    fi
+}
+
+# Run a command and assert its stdout CONTAINS a substring. Unlike run_test this
+# verifies the actual output, not just the exit code — important for commands
+# that can succeed while producing wrong data (pivot/diff/optimize regressions).
+run_test_contains() {
+    local test_name="$1"
+    local command="$2"
+    local expected="$3"
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    log "Running test: $test_name"
+
+    local output status
+    if output="$(eval "$command" 2>/dev/null)"; then status=0; else status=$?; fi
+    if [ "$status" -eq 0 ] && printf '%s' "$output" | grep -qF -- "$expected"; then
+        success "$test_name"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+    else
+        error "$test_name (expected output to contain: '$expected')"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    fi
+}
+
+# Run a command and assert it succeeds AND its stdout does NOT contain a substring.
+run_test_excludes() {
+    local test_name="$1"
+    local command="$2"
+    local unexpected="$3"
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    log "Running test: $test_name"
+
+    local output status
+    if output="$(eval "$command" 2>/dev/null)"; then status=0; else status=$?; fi
+    if [ "$status" -eq 0 ] && ! printf '%s' "$output" | grep -qF -- "$unexpected"; then
+        success "$test_name"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
+    else
+        error "$test_name (expected success and output to exclude: '$unexpected')"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    fi
+}
+
+# Run a command that is EXPECTED to fail (non-zero exit), e.g. invalid input.
+run_test_fails() {
+    local test_name="$1"
+    local command="$2"
+
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    log "Running test: $test_name"
+
+    if eval "$command" > /dev/null 2>&1; then
+        error "$test_name (command unexpectedly succeeded)"
+        FAILED_TESTS=$((FAILED_TESTS + 1))
+    else
+        success "$test_name"
+        PASSED_TESTS=$((PASSED_TESTS + 1))
     fi
 }
 
@@ -346,6 +405,84 @@ run_test "global - verbose flag" "\"$NAIL_PATH\" head '$TEST_DATA' -n 2 --verbos
 run_test "global - jobs flag" "\"$NAIL_PATH\" stats '$TEST_DATA' -j 2"
 run_test "global - format flag" "\"$NAIL_PATH\" head '$TEST_DATA' -n 3 -f json"
 run_test "global - output flag" "\"$NAIL_PATH\" schema '$TEST_DATA' -o '$TEMP_DIR/global_output.txt'"
+
+# ==========================================
+# UNIFIED CONDITION ENGINE (filter / drop / create)
+# ==========================================
+# These verify the shared, newbie-friendly condition syntax: math-style chained
+# ranges, SQL operators (IN/LIKE/BETWEEN/IS NULL), case-insensitive column names,
+# unquoted string values, '==' alias, and ',' = AND / '|' = OR.
+# Reference rows in test_data.csv: Alice Johnson (age 25, price 129.99, active),
+# Bob Smith (age 34, price 45.50, Books, inactive), Carol Williams (age 28, active).
+
+echo -e "\n${BLUE}=== UNIFIED CONDITION ENGINE (filter / drop / create) ===${NC}"
+
+# filter: math-style chained range — keeps Alice (25), drops Bob (34)
+run_test_contains "filter - chained range keeps in-range" "\"$NAIL_PATH\" filter '$TEST_DATA' -c '20 < age < 30' -o - -f csv" "Alice Johnson"
+run_test_excludes "filter - chained range drops out-of-range" "\"$NAIL_PATH\" filter '$TEST_DATA' -c '20 < age < 30' -o - -f csv" "Bob Smith"
+
+# filter: case-insensitive column (STATUS) + unquoted value (active)
+run_test_contains "filter - case-insensitive col + unquoted value" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'STATUS=active' -o - -f csv" "Alice Johnson"
+run_test_excludes "filter - unquoted value excludes non-matches" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'STATUS=active' -o - -f csv" "inactive"
+
+# filter: SQL IN list
+run_test_contains "filter - SQL IN (Electronics)" "\"$NAIL_PATH\" filter '$TEST_DATA' -c \"category IN ('Electronics','Books')\" -o - -f csv" "Electronics"
+run_test_contains "filter - SQL IN (Books)" "\"$NAIL_PATH\" filter '$TEST_DATA' -c \"category IN ('Electronics','Books')\" -o - -f csv" "Books"
+
+# filter: SQL LIKE
+run_test_contains "filter - SQL LIKE prefix" "\"$NAIL_PATH\" filter '$TEST_DATA' -c \"name LIKE 'Alice%'\" -o - -f csv" "Alice Johnson"
+run_test_excludes "filter - SQL LIKE excludes non-matches" "\"$NAIL_PATH\" filter '$TEST_DATA' -c \"name LIKE 'Alice%'\" -o - -f csv" "Bob Smith"
+
+# filter: SQL BETWEEN — keeps Alice (129.99), drops Bob (45.50)
+run_test_contains "filter - SQL BETWEEN keeps in-range" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'price BETWEEN 100 AND 300' -o - -f csv" "Alice Johnson"
+run_test_excludes "filter - SQL BETWEEN drops out-of-range" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'price BETWEEN 100 AND 300' -o - -f csv" "Bob Smith"
+
+# filter: '==' alias
+run_test_contains "filter - '==' alias" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'age == 25' -o - -f csv" "Alice Johnson"
+
+# filter: precedence — (age>100 AND status=active) OR category=Books => only Books
+run_test_contains "filter - AND/OR precedence via ,|" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'age>100,status=active|category=Books' -o - -f csv" "Bob Smith"
+
+# filter: a typo'd column must ERROR, not silently pass (LHS stays an identifier)
+run_test_fails "filter - typo column errors (no silent pass)" "\"$NAIL_PATH\" filter '$TEST_DATA' -c 'aage > 20' -o - -f csv"
+
+# drop: condition form is the mirror of filter — drops active rows, keeps inactive
+run_test_excludes "drop - condition drops matching rows" "\"$NAIL_PATH\" drop '$TEST_DATA' -r 'status=active' -o - -f csv" "Alice Johnson"
+run_test_contains "drop - condition keeps non-matching rows" "\"$NAIL_PATH\" drop '$TEST_DATA' -r 'status=active' -o - -f csv" "Bob Smith"
+
+# drop: chained range condition drops Alice (25) & Carol (28), keeps Bob (34)
+run_test_excludes "drop - chained range drops in-range" "\"$NAIL_PATH\" drop '$TEST_DATA' -r '20 < age < 30' -o - -f csv" "Alice Johnson"
+run_test_contains "drop - chained range keeps out-of-range" "\"$NAIL_PATH\" drop '$TEST_DATA' -r '20 < age < 30' -o - -f csv" "Bob Smith"
+
+# drop: plain row indices must still be treated as indices, not a condition
+run_test "drop - row indices still work" "\"$NAIL_PATH\" drop '$TEST_DATA' -r '1,3,5' -o '$TEMP_DIR/drop_idx.csv'"
+
+# create: row filter (-r) now uses the unified engine; column expr still works
+run_test_contains "create - unified row filter + new column" "\"$NAIL_PATH\" create '$TEST_DATA' -r '20 < age < 30' -c 'doubled=price*2' -o - -f csv" "doubled"
+
+# ==========================================
+# REGRESSION CHECKS (pivot / diff / optimize correctness)
+# ==========================================
+# These guard the three bugs that previously produced WRONG output while exiting 0.
+
+echo -e "\n${BLUE}=== REGRESSION CHECKS (pivot / diff / optimize) ===${NC}"
+
+# pivot: distinct status values must be spread into their own columns (the header
+# should carry 'inactive' as a column; the old broken version kept a 'status' column).
+run_test_contains "pivot - spreads pivot values into columns" "\"$NAIL_PATH\" pivot '$TEST_DATA' -i category -c status -l price --agg sum -o - -f csv | head -1" "inactive"
+run_test_excludes "pivot - original pivot column is gone" "\"$NAIL_PATH\" pivot '$TEST_DATA' -i category -c status -l price --agg sum -o - -f csv | head -1" "status"
+
+# diff: build two tiny datasets with one unchanged, one modified, one added, one removed row.
+printf 'id,val\n1,a\n2,b\n3,c\n' > "$TEMP_DIR/diff_left.csv"
+printf 'id,val\n1,a\n2,B\n4,d\n' > "$TEMP_DIR/diff_right.csv"
+run_test_contains "diff - identical row reported UNCHANGED" "\"$NAIL_PATH\" diff '$TEMP_DIR/diff_left.csv' -c '$TEMP_DIR/diff_right.csv' -k id -o - -f csv" "UNCHANGED"
+run_test_contains "diff - changed row reported MODIFIED" "\"$NAIL_PATH\" diff '$TEMP_DIR/diff_left.csv' -c '$TEMP_DIR/diff_right.csv' -k id -o - -f csv" "MODIFIED"
+run_test_contains "diff - added row reported ADDED" "\"$NAIL_PATH\" diff '$TEMP_DIR/diff_left.csv' -c '$TEMP_DIR/diff_right.csv' -k id -o - -f csv" "ADDED"
+run_test_contains "diff - removed row reported REMOVED" "\"$NAIL_PATH\" diff '$TEMP_DIR/diff_left.csv' -c '$TEMP_DIR/diff_right.csv' -k id -o - -f csv" "REMOVED"
+run_test_excludes "diff - --changes-only drops UNCHANGED rows" "\"$NAIL_PATH\" diff '$TEMP_DIR/diff_left.csv' -c '$TEMP_DIR/diff_right.csv' -k id --changes-only -o - -f csv" "UNCHANGED"
+
+# optimize: --compression zstd must actually be written (verified via metadata)
+run_test_contains "optimize - zstd compression actually applied" "\"$NAIL_PATH\" optimize '$TEMP_DIR/test_data.parquet' --compression zstd -o '$TEMP_DIR/opt_zstd.parquet' && \"$NAIL_PATH\" metadata '$TEMP_DIR/opt_zstd.parquet' --show-compression" "zstd"
 
 # ==========================================
 # RESULTS SUMMARY

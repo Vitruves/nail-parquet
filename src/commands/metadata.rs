@@ -29,8 +29,10 @@ pub struct MetadataArgs {
 	#[arg(long, help = "Show column chunk information")]
 	pub column_chunks: bool,
 
+	// `--compression` (a codec) is a global output flag, so the metadata display
+	// toggle is exposed as `--show-compression` to avoid the name clash.
 	#[arg(long, help = "Show compression information")]
-	pub compression: bool,
+	pub show_compression: bool,
 
 	#[arg(long, help = "Show encoding information")]
 	pub encoding: bool,
@@ -88,7 +90,7 @@ pub async fn execute(args: MetadataArgs) -> NailResult<()> {
 	}
 
 	// Compression information
-	if args.compression || args.all {
+	if args.show_compression || args.all {
 		collect_compression_metadata(metadata, &mut metadata_items);
 	}
 
@@ -739,7 +741,7 @@ mod tests {
 			schema: false,
 			row_groups: false,
 			column_chunks: false,
-			compression: false,
+			show_compression: false,
 			encoding: false,
 			statistics: false,
 			all: false,
@@ -768,7 +770,7 @@ mod tests {
 			schema: false,
 			row_groups: false,
 			column_chunks: false,
-			compression: false,
+			show_compression: false,
 			encoding: false,
 			statistics: false,
 			all: true,
@@ -797,7 +799,7 @@ mod tests {
 			schema: false,
 			row_groups: false,
 			column_chunks: false,
-			compression: false,
+			show_compression: false,
 			encoding: false,
 			statistics: false,
 			all: false,

@@ -2,6 +2,7 @@ use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
+use crate::utils::predicate::{normalize_expression, normalize_predicate, split_top_level_commas};
 use clap::Args;
 
 #[derive(Args, Clone)]
@@ -52,269 +53,6 @@ pub struct CreateArgs {
 	pub row_filter: Option<String>,
 }
 
-struct FunctionAlias {
-	alias: &'static str,
-	target: &'static str,
-	is_aggregate: bool,
-}
-
-const FUNCTION_ALIASES: &[FunctionAlias] = &[
-	FunctionAlias {
-		alias: "mean",
-		target: "avg",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "avg",
-		target: "avg",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "sum",
-		target: "sum",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "min",
-		target: "min",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "max",
-		target: "max",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "count",
-		target: "count",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "median",
-		target: "median",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "std",
-		target: "stddev_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "stdev",
-		target: "stddev_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "stddev",
-		target: "stddev_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "stddev_samp",
-		target: "stddev_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "stddev_pop",
-		target: "stddev_pop",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "var",
-		target: "var_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "variance",
-		target: "var_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "var_samp",
-		target: "var_samp",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "var_pop",
-		target: "var_pop",
-		is_aggregate: true,
-	},
-	FunctionAlias {
-		alias: "pow",
-		target: "power",
-		is_aggregate: false,
-	},
-];
-
-fn lookup_alias(name: &str) -> Option<&'static FunctionAlias> {
-	let lower = name.to_ascii_lowercase();
-	FUNCTION_ALIASES.iter().find(|f| f.alias == lower)
-}
-
-/// Split a column-spec string on top-level commas, ignoring commas inside
-/// parentheses or quoted strings so calls like `pow(a, b)` and `round(x, 2)`
-/// survive intact.
-fn split_top_level_commas(input: &str) -> Vec<String> {
-	let bytes = input.as_bytes();
-	let mut parts = Vec::new();
-	let mut start = 0;
-	let mut depth = 0i32;
-	let mut in_single = false;
-	let mut in_double = false;
-	for (i, &c) in bytes.iter().enumerate() {
-		if in_single {
-			if c == b'\'' {
-				in_single = false;
-			}
-			continue;
-		}
-		if in_double {
-			if c == b'"' {
-				in_double = false;
-			}
-			continue;
-		}
-		match c {
-			b'\'' => in_single = true,
-			b'"' => in_double = true,
-			b'(' => depth += 1,
-			b')' => depth -= 1,
-			b',' if depth == 0 => {
-				parts.push(input[start..i].to_string());
-				start = i + 1;
-			}
-			_ => {}
-		}
-	}
-	parts.push(input[start..].to_string());
-	parts
-}
-
-fn find_matching_paren(bytes: &[u8], open: usize) -> Option<usize> {
-	debug_assert_eq!(bytes[open], b'(');
-	let mut depth = 0i32;
-	let mut i = open;
-	let mut in_single = false;
-	let mut in_double = false;
-	while i < bytes.len() {
-		let c = bytes[i];
-		if in_single {
-			if c == b'\'' {
-				in_single = false;
-			}
-		} else if in_double {
-			if c == b'"' {
-				in_double = false;
-			}
-		} else {
-			match c {
-				b'\'' => in_single = true,
-				b'"' => in_double = true,
-				b'(' => depth += 1,
-				b')' => {
-					depth -= 1;
-					if depth == 0 {
-						return Some(i);
-					}
-				}
-				_ => {}
-			}
-		}
-		i += 1;
-	}
-	None
-}
-
-/// Rewrite a nail expression into a DataFusion SQL expression:
-/// * Apply curated function aliases (mean → avg, std → stddev_samp, pow → power, ...).
-/// * Wrap aggregate calls with `OVER ()` so they broadcast across rows (unless the
-///   user already supplied an `OVER` clause).
-/// * Leave unknown function calls, identifiers, quoted strings, and operators
-///   untouched so they reach DataFusion as written.
-fn rewrite_expression(expr: &str) -> String {
-	let bytes = expr.as_bytes();
-	let mut out = String::new();
-	let mut i = 0;
-	while i < bytes.len() {
-		let c = bytes[i];
-		if c == b'\'' {
-			out.push('\'');
-			i += 1;
-			while i < bytes.len() {
-				let b = bytes[i];
-				out.push(b as char);
-				i += 1;
-				if b == b'\'' {
-					if i < bytes.len() && bytes[i] == b'\'' {
-						out.push('\'');
-						i += 1;
-					} else {
-						break;
-					}
-				}
-			}
-			continue;
-		}
-		if c == b'"' {
-			out.push('"');
-			i += 1;
-			while i < bytes.len() {
-				let b = bytes[i];
-				out.push(b as char);
-				i += 1;
-				if b == b'"' {
-					break;
-				}
-			}
-			continue;
-		}
-		if c.is_ascii_alphabetic() || c == b'_' {
-			let start = i;
-			while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-				i += 1;
-			}
-			let ident = &expr[start..i];
-			let mut j = i;
-			while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-				j += 1;
-			}
-			if j < bytes.len() && bytes[j] == b'(' {
-				if let Some(close) = find_matching_paren(bytes, j) {
-					let (target_name, is_aggregate) = match lookup_alias(ident) {
-						Some(a) => (a.target, a.is_aggregate),
-						None => (ident, false),
-					};
-					let inner = &expr[j + 1..close];
-					let rewritten_inner = rewrite_expression(inner);
-					out.push_str(target_name);
-					out.push_str(&expr[i..j]);
-					out.push('(');
-					out.push_str(&rewritten_inner);
-					out.push(')');
-					if is_aggregate {
-						let mut k = close + 1;
-						while k < bytes.len() && bytes[k].is_ascii_whitespace() {
-							k += 1;
-						}
-						let has_over =
-							k + 4 <= bytes.len() && expr[k..k + 4].eq_ignore_ascii_case("OVER");
-						if !has_over {
-							out.push_str(" OVER ()");
-						}
-					}
-					i = close + 1;
-					continue;
-				}
-			}
-			out.push_str(ident);
-			continue;
-		}
-		out.push(c as char);
-		i += 1;
-	}
-	out
-}
-
 pub async fn execute(args: CreateArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!(
 		"Reading data from: {}",
@@ -332,7 +70,13 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
 	if let Some(row_expr) = &args.row_filter {
 		args.common
 			.log_if_verbose(&format!("Applying row filter: {}", row_expr));
-		let rewritten_filter = rewrite_expression(row_expr);
+		let columns: Vec<String> = result_df
+			.schema()
+			.fields()
+			.iter()
+			.map(|f| f.name().clone())
+			.collect();
+		let rewritten_filter = normalize_predicate(row_expr, &columns)?;
 		if rewritten_filter != *row_expr {
 			args.common
 				.log_if_verbose(&format!("Rewritten row filter: {}", rewritten_filter));
@@ -401,7 +145,7 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
 		let mut select_list = vec!["*".to_string()];
 
 		for (name, expr_str) in &column_map {
-			let rewritten = rewrite_expression(expr_str);
+			let rewritten = normalize_expression(expr_str, &existing_columns);
 			if rewritten != *expr_str {
 				args.common
 					.log_if_verbose(&format!("Rewritten '{}' -> '{}'", expr_str, rewritten));
@@ -430,6 +174,7 @@ pub async fn execute(args: CreateArgs) -> NailResult<()> {
 mod tests {
 	use super::*;
 	use crate::cli::CommonArgs;
+	use crate::utils::predicate::rewrite_expression;
 	use arrow::array::{Float64Array, Int64Array, StringArray};
 	use arrow::record_batch::RecordBatch;
 	use arrow_schema::{DataType, Field, Schema};

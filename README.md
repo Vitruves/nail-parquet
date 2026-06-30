@@ -13,6 +13,20 @@ Process gigabyte-scale datasets in seconds • SQL-powered • Zero configuratio
 
 ## Installation
 
+Prebuilt binary (macOS/Linux — auto-detects your OS and architecture):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vitruves/nail-parquet/main/install.sh | sh
+```
+
+It installs to `/usr/local/bin` when writable, otherwise to `~/.local/bin`. Set `BINDIR` to choose the location explicitly, and the installer tells you if the target dir is not on your `PATH`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Vitruves/nail-parquet/main/install.sh | BINDIR="$HOME/bin" sh
+```
+
+With Cargo:
+
 ```bash
 cargo install nail-parquet
 ```
@@ -71,6 +85,8 @@ sort          Sort data by columns with various strategies
 split         Split data into multiple files
 stats         Calculate descriptive statistics
 tail          Display last N rows
+transpose     Transpose rows and columns
+unique        List distinct rows or per-column value counts
 update        Check for newer versions
 help          Print this message or the help of the given subcommand(s)
 ```
@@ -84,12 +100,15 @@ Available on all commands:
 | Flag | Description |
 |------|-------------|
 | `-v, --verbose` | Timing and progress output |
-| `-j, --jobs N` | Parallel jobs (default: half of CPU cores) |
-| `-o, --output FILE` | Output file (prints to console if omitted) |
+| `-j, --jobs N` | Parallel jobs (default: all CPU cores) |
+| `-o, --output FILE` | Output file, or `-` for stdout (prints a table to the console if omitted) |
 | `-f, --format FORMAT` | Output format: `json`, `csv`, `parquet`, `text`, `xlsx` |
 | `--batch-size N` | DataFusion batch size (rows per record batch) |
 | `--table` | Display console output as a columnar table instead of cards |
 | `--random N` | Random seed for reproducible results |
+| `--compression CODEC` | Parquet output codec: `snappy` (default), `gzip`, `zstd`, `brotli` |
+| `--compression-level N` | Compression level (1-9) for gzip/zstd/brotli |
+| `--color WHEN` | Colorize console output: `auto` (default), `always`, `never` (also honors `NO_COLOR`) |
 | `-h, --help` | Command help |
 
 ## Examples
@@ -120,11 +139,39 @@ nail pivot binned.parquet -i "age_binned" -c "category" -l "revenue" --agg sum -
 nail stats summary.parquet --stats-type exhaustive -o summary_stats.json
 ```
 
+Reshape and summarize:
+
+```bash
+nail unique sales.parquet -c "category"                 # distinct values of a column
+nail unique sales.parquet -c "category,region" --count  # value counts, most frequent first
+nail transpose metrics.parquet --header-column metric -o wide.parquet
+```
+
 Compare versions:
 
 ```bash
 nail diff yesterday.parquet --compare today.parquet --keys "id" --changes-only
 ```
+
+## Piping (stdin/stdout)
+
+Every command can read from stdin and write to stdout, so you can chain `nail` with itself or other tools. Use `-o -` on the producer to stream out, and `-` as the input on the consumer to read in. The input format is auto-detected.
+
+Streaming to stdout defaults to **Parquet**, which preserves the full schema (types and nested `List`/`Struct`/`Map` columns) losslessly across the pipe. Use `-f csv` or `-f json` when you want text output for other tools.
+
+```bash
+# chain nail commands (Parquet by default — keeps all types)
+nail filter sales.parquet -c "revenue > 1000" -o - | nail sort - -c revenue -o - | nail head - -n 10
+
+# stream as CSV/JSON for other tools
+nail select sales.parquet -c "id,revenue" -o - -f csv | grep -v '^0,'
+nail sample sales.parquet -n 100 -o - -f json | jq '.revenue'
+
+# read from stdin produced elsewhere
+cat data.parquet | nail count -
+```
+
+Pipes that close early (`| head`, `| less`) are handled cleanly — no broken-pipe errors.
 
 ## Performance Tips
 

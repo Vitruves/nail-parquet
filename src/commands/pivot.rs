@@ -3,8 +3,7 @@ use crate::error::{NailError, NailResult};
 use crate::utils::output::OutputHandler;
 use crate::utils::{create_context_with_jobs, io::read_data_with_opts};
 use clap::Args;
-use datafusion::arrow::array::Array;
-use datafusion::functions_aggregate::expr_fn::{avg, count, max, min, sum};
+use datafusion::arrow::array::ArrayRef;
 use datafusion::prelude::*;
 
 #[derive(Args, Clone)]
@@ -50,6 +49,19 @@ pub enum AggregationFunction {
 	Max,
 }
 
+impl AggregationFunction {
+	/// SQL aggregate function name used when building the pivot query.
+	fn sql_function(&self) -> &'static str {
+		match self {
+			AggregationFunction::Sum => "sum",
+			AggregationFunction::Mean => "avg",
+			AggregationFunction::Count => "count",
+			AggregationFunction::Min => "min",
+			AggregationFunction::Max => "max",
+		}
+	}
+}
+
 pub async fn execute(args: PivotArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!(
 		"Reading data from: {}",
@@ -57,7 +69,6 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
 	));
 
 	// Read input data
-	let _ctx = create_context_with_jobs(args.common.jobs).await?;
 	let df =
 		read_data_with_opts(&args.common.input, args.common.jobs, args.common.batch_size).await?;
 
@@ -167,10 +178,7 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
 	args.common
 		.log_if_verbose(&format!("Aggregation: {:?}", args.agg));
 
-	// Implement proper pivot table functionality
-	// This supports multiple pivot columns and value columns
-
-	// Create pivot table by processing each combination of pivot columns and value columns
+	// Spread the pivot columns into one aggregated column per distinct key.
 	let result_df = create_pivot_table(
 		&df,
 		&index_cols,
@@ -178,6 +186,7 @@ pub async fn execute(args: PivotArgs) -> NailResult<()> {
 		&value_cols,
 		&args.agg,
 		&args.fill,
+		args.common.jobs,
 	)
 	.await?;
 
@@ -194,106 +203,184 @@ async fn create_pivot_table(
 	pivot_cols: &[&str],
 	value_cols: &[&str],
 	agg: &AggregationFunction,
-	_fill_value: &str,
+	fill_value: &str,
+	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-	use std::collections::HashMap;
+	let ctx = create_context_with_jobs(jobs).await?;
+	let src = "__nail_pivot_src";
+	ctx.register_table(src, df.clone().into_view())?;
 
-	// First, get unique values for all pivot columns
-	let mut pivot_values = HashMap::new();
-	for &pivot_col in pivot_cols {
-		let unique_values = get_unique_values(df, pivot_col).await?;
-		pivot_values.insert(pivot_col.to_string(), unique_values);
-	}
+	// 1. Find the distinct combinations of pivot-key values that actually occur.
+	//    NULL keys are dropped, matching conventional pivot/crosstab semantics.
+	let pivot_select = pivot_cols
+		.iter()
+		.map(|c| quote_ident(c))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let not_null = pivot_cols
+		.iter()
+		.map(|c| format!("{} IS NOT NULL", quote_ident(c)))
+		.collect::<Vec<_>>()
+		.join(" AND ");
+	let combos_sql = format!(
+		"SELECT DISTINCT {sel} FROM {src} WHERE {nn} ORDER BY {sel}",
+		sel = pivot_select,
+		nn = not_null,
+		src = src,
+	);
+	let combo_batches = ctx.sql(&combos_sql).await?.collect().await?;
 
-	// Create the base aggregation with all group columns
-	let mut group_exprs: Vec<Expr> = index_cols.iter().map(|c| col(*c)).collect();
-	group_exprs.extend(pivot_cols.iter().map(|c| col(*c)));
-
-	// Create aggregation expressions for each value column
-	let mut agg_exprs = Vec::new();
-	for &value_col in value_cols {
-		let agg_expr = match agg {
-			AggregationFunction::Sum => sum(col(value_col)),
-			AggregationFunction::Mean => avg(col(value_col)),
-			AggregationFunction::Count => count(col(value_col)),
-			AggregationFunction::Min => min(col(value_col)),
-			AggregationFunction::Max => max(col(value_col)),
-		};
-		agg_exprs.push(agg_expr.alias(format!("{}_{}", value_col, agg.to_string().to_lowercase())));
-	}
-
-	// Perform the initial aggregation
-	let grouped_df = df.clone().aggregate(group_exprs, agg_exprs)?;
-
-	// For now, return the grouped result as a basic pivot
-	// A full pivot implementation would require complex column transformations
-	// which are challenging with DataFusion's current API
-	Ok(grouped_df)
-}
-
-async fn get_unique_values(df: &DataFrame, column: &str) -> NailResult<Vec<String>> {
-	let unique_df = df.clone().select(vec![col(column)])?.distinct()?;
-
-	let batches = unique_df.collect().await?;
-	let mut values = Vec::new();
-
-	for batch in batches {
-		let array = batch
-			.column_by_name(column)
-			.ok_or_else(|| NailError::InvalidArgument(format!("Column '{}' not found", column)))?;
-
-		// Handle different data types
-		match array.data_type() {
-			datafusion::arrow::datatypes::DataType::Utf8 => {
-				if let Some(str_array) = array
-					.as_any()
-					.downcast_ref::<datafusion::arrow::array::StringArray>()
-				{
-					for i in 0..str_array.len() {
-						if !str_array.is_null(i) {
-							values.push(str_array.value(i).to_string());
-						}
-					}
-				}
+	// Each combination becomes (match predicate, human-readable label).
+	let mut combos: Vec<(String, String)> = Vec::new();
+	for batch in &combo_batches {
+		for row in 0..batch.num_rows() {
+			let mut preds = Vec::with_capacity(pivot_cols.len());
+			let mut label_parts = Vec::with_capacity(pivot_cols.len());
+			for (ci, pcol) in pivot_cols.iter().enumerate() {
+				let (lit_sql, label) = sql_literal_and_label(batch.column(ci), row)?;
+				preds.push(format!("{} = {}", quote_ident(pcol), lit_sql));
+				label_parts.push(label);
 			}
-			datafusion::arrow::datatypes::DataType::Int64 => {
-				if let Some(int_array) = array
-					.as_any()
-					.downcast_ref::<datafusion::arrow::array::Int64Array>()
-				{
-					for i in 0..int_array.len() {
-						if !int_array.is_null(i) {
-							values.push(int_array.value(i).to_string());
-						}
-					}
-				}
-			}
-			datafusion::arrow::datatypes::DataType::Float64 => {
-				if let Some(float_array) = array
-					.as_any()
-					.downcast_ref::<datafusion::arrow::array::Float64Array>()
-				{
-					for i in 0..float_array.len() {
-						if !float_array.is_null(i) {
-							values.push(float_array.value(i).to_string());
-						}
-					}
-				}
-			}
-			_ => {
-				// For other types, convert to string representation
-				for i in 0..array.len() {
-					if !array.is_null(i) {
-						values.push(format!("value_{}", i));
-					}
-				}
-			}
+			combos.push((preds.join(" AND "), label_parts.join("_")));
 		}
 	}
 
-	values.sort();
-	values.dedup();
-	Ok(values)
+	if combos.is_empty() {
+		return Err(NailError::InvalidArgument(
+			"No non-null pivot key values found to spread into columns".to_string(),
+		));
+	}
+
+	// 2. Build one aggregated column per (value column × pivot key).
+	let agg_fn = agg.sql_function();
+	let multi_value = value_cols.len() > 1;
+	let mut select_parts: Vec<String> = index_cols.iter().map(|c| quote_ident(c)).collect();
+	let mut seen_names = std::collections::HashSet::new();
+	for &vcol in value_cols {
+		for (pred, label) in &combos {
+			let mut col_name = if multi_value {
+				format!("{}_{}", vcol, label)
+			} else {
+				label.clone()
+			};
+			// Guard against collisions (e.g. a pivot label equal to an index name).
+			while !seen_names.insert(col_name.clone()) {
+				col_name.push('_');
+			}
+			let inner = format!(
+				"{}(CASE WHEN {} THEN {} END)",
+				agg_fn,
+				pred,
+				quote_ident(vcol)
+			);
+			let expr = apply_fill(&inner, fill_value);
+			select_parts.push(format!("{} AS {}", expr, quote_ident(&col_name)));
+		}
+	}
+
+	let group_by = index_cols
+		.iter()
+		.map(|c| quote_ident(c))
+		.collect::<Vec<_>>()
+		.join(", ");
+	let sql = format!(
+		"SELECT {select} FROM {src} GROUP BY {group} ORDER BY {group}",
+		select = select_parts.join(", "),
+		src = src,
+		group = group_by,
+	);
+
+	let result = ctx.sql(&sql).await?;
+	Ok(result)
+}
+
+/// Quote a SQL identifier, escaping embedded double quotes.
+fn quote_ident(name: &str) -> String {
+	format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Wrap a pivoted aggregate in COALESCE so empty cells take the fill value.
+/// `null`/`none`/`nan`/empty leaves cells NULL; numeric fills inject unquoted,
+/// anything else is treated as a string literal.
+fn apply_fill(inner: &str, fill: &str) -> String {
+	let f = fill.trim();
+	if f.is_empty()
+		|| f.eq_ignore_ascii_case("null")
+		|| f.eq_ignore_ascii_case("none")
+		|| f.eq_ignore_ascii_case("nan")
+	{
+		return inner.to_string();
+	}
+	if f.parse::<i64>().is_ok() || f.parse::<f64>().is_ok() {
+		format!("COALESCE({}, {})", inner, f)
+	} else {
+		format!("COALESCE({}, '{}')", inner, f.replace('\'', "''"))
+	}
+}
+
+/// Render a single array cell as a typed SQL literal (for the CASE predicate)
+/// plus a display label (for the generated column name).
+fn sql_literal_and_label(array: &ArrayRef, row: usize) -> NailResult<(String, String)> {
+	use datafusion::arrow::array::*;
+	use datafusion::arrow::datatypes::DataType;
+
+	if array.is_null(row) {
+		return Ok(("NULL".to_string(), "null".to_string()));
+	}
+
+	macro_rules! num {
+		($ty:ty) => {{
+			let a = array.as_any().downcast_ref::<$ty>().unwrap();
+			let v = a.value(row).to_string();
+			(v.clone(), v)
+		}};
+	}
+
+	let pair = match array.data_type() {
+		DataType::Utf8 => {
+			let v = array
+				.as_any()
+				.downcast_ref::<StringArray>()
+				.unwrap()
+				.value(row);
+			(format!("'{}'", v.replace('\'', "''")), v.to_string())
+		}
+		DataType::LargeUtf8 => {
+			let v = array
+				.as_any()
+				.downcast_ref::<LargeStringArray>()
+				.unwrap()
+				.value(row);
+			(format!("'{}'", v.replace('\'', "''")), v.to_string())
+		}
+		DataType::Boolean => {
+			let v = array
+				.as_any()
+				.downcast_ref::<BooleanArray>()
+				.unwrap()
+				.value(row);
+			(v.to_string(), v.to_string())
+		}
+		DataType::Int8 => num!(Int8Array),
+		DataType::Int16 => num!(Int16Array),
+		DataType::Int32 => num!(Int32Array),
+		DataType::Int64 => num!(Int64Array),
+		DataType::UInt8 => num!(UInt8Array),
+		DataType::UInt16 => num!(UInt16Array),
+		DataType::UInt32 => num!(UInt32Array),
+		DataType::UInt64 => num!(UInt64Array),
+		DataType::Float32 => num!(Float32Array),
+		DataType::Float64 => num!(Float64Array),
+		_ => {
+			// Fallback: stringify via Arrow's formatter and treat as text.
+			use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+			let fmt = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
+				.map_err(NailError::Arrow)?;
+			let s = fmt.value(row).to_string();
+			(format!("'{}'", s.replace('\'', "''")), s)
+		}
+	};
+	Ok(pair)
 }
 
 impl std::fmt::Display for AggregationFunction {

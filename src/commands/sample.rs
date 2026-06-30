@@ -3,10 +3,11 @@ use crate::error::{NailError, NailResult};
 use crate::utils::io::read_data_with_opts;
 use crate::utils::output::OutputHandler;
 use clap::Args;
-use datafusion::arrow::array::{Array, StringArray};
+use datafusion::arrow::array::{Array, RecordBatch, StringArray, UInt64Array};
+use datafusion::arrow::compute::{concat_batches, take};
 use datafusion::prelude::*;
-use rand::seq::SliceRandom;
-use rand::{rngs::StdRng, SeedableRng};
+use futures::StreamExt;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 #[derive(Args, Clone)]
 #[command(after_help = "Examples:
@@ -62,14 +63,7 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 
 	let sampled_df = match args.method {
 		SampleMethod::Random => {
-			sample_random(
-				&df,
-				total_rows,
-				args.number,
-				args.common.random,
-				args.common.jobs,
-			)
-			.await?
+			sample_random(&df, args.number, args.common.random, args.common.jobs).await?
 		}
 		SampleMethod::Stratified => {
 			if let Some(col) = &args.stratify_by {
@@ -94,72 +88,81 @@ pub async fn execute(args: SampleArgs) -> NailResult<()> {
 	Ok(())
 }
 
+/// Uniform random sample of `n` rows via single-pass reservoir sampling
+/// (Algorithm R) over a deterministically-ordered, single-partition stream.
+///
+/// This streams the input once (O(rows) time, O(n) memory) and never adds a
+/// helper column, so the output schema always equals the input schema. With a
+/// `seed` the result is fully reproducible: the row order is pinned by reading a
+/// single partition and the RNG is seeded, so the same seed always yields the
+/// same rows. Output rows are returned in input order.
 async fn sample_random(
 	df: &DataFrame,
-	total_rows: usize,
 	n: usize,
 	seed: Option<u64>,
 	jobs: Option<usize>,
 ) -> NailResult<DataFrame> {
-	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
-	let table_name = "temp_table";
-	ctx.register_table(table_name, df.clone().into_view())?;
+	// A single target partition gives a deterministic row order, which is what
+	// makes seeded sampling reproducible. (`jobs` still drives the output
+	// context below so downstream work keeps the user's parallelism.)
+	let read_ctx = crate::utils::create_context_with_opts(Some(1), None).await?;
+	read_ctx.register_table("temp_table", df.clone().into_view())?;
+	let mut stream = read_ctx
+		.sql("SELECT * FROM temp_table")
+		.await?
+		.execute_stream()
+		.await?;
+	let schema = stream.schema();
 
-	// For very large datasets, use a more scalable approach
-	if total_rows > 100_000 || n > 10_000 {
-		// Use DataFusion's TABLESAMPLE or a hash-based approach
-		let sample_ratio = n as f64 / total_rows as f64;
+	let mut rng = match seed {
+		Some(s) => StdRng::seed_from_u64(s),
+		None => StdRng::from_entropy(),
+	};
 
-		if let Some(s) = seed {
-			// Use deterministic hash-based sampling
-			let sql = format!(
-				"WITH numbered AS (
-					SELECT *, ROW_NUMBER() OVER() as rn FROM {}
-				)
-				SELECT * FROM numbered 
-				WHERE ABS(HASH(CAST(rn AS VARCHAR) || '{}')) % {} < {}
-				ORDER BY rn
-				LIMIT {}",
-				table_name,
-				s,
-				total_rows,
-				(total_rows as f64 * sample_ratio) as usize,
-				n
-			);
-			let result = ctx.sql(&sql).await?;
-			Ok(result)
-		} else {
-			// Use ORDER BY RANDOM() for true randomness
-			let sql = format!("SELECT * FROM {} ORDER BY RANDOM() LIMIT {}", table_name, n);
-			let result = ctx.sql(&sql).await?;
-			Ok(result)
+	// Reservoir of (original row index, single-row batch). Each kept row is
+	// copied into its own small batch so dropping a source batch frees its
+	// memory — keeping the footprint at O(n) rather than O(rows).
+	let mut reservoir: Vec<(usize, RecordBatch)> = Vec::with_capacity(n);
+	let mut seen = 0usize;
+
+	while let Some(batch) = stream.next().await {
+		let batch = batch?;
+		for row in 0..batch.num_rows() {
+			if reservoir.len() < n {
+				reservoir.push((seen, copy_row(&batch, row)?));
+			} else {
+				// Replace a random reservoir slot with probability n / seen.
+				let j = rng.gen_range(0..=seen);
+				if j < n {
+					reservoir[j] = (seen, copy_row(&batch, row)?);
+				}
+			}
+			seen += 1;
 		}
-	} else {
-		// For smaller datasets, use the indices approach
-		let mut rng = match seed {
-			Some(s) => StdRng::seed_from_u64(s),
-			None => StdRng::from_entropy(),
-		};
-
-		let mut indices: Vec<usize> = (0..total_rows).collect();
-		indices.shuffle(&mut rng);
-		indices.truncate(n);
-		indices.sort();
-
-		// Create a temporary table with the sampled indices
-		let values_rows: Vec<String> = indices.iter().map(|&i| format!("({})", i + 1)).collect();
-
-		let values_sql = values_rows.join(", ");
-		let sql = format!(
-			"WITH sample_indices(rn) AS (VALUES {}) 
-			 SELECT t.* FROM (SELECT *, ROW_NUMBER() OVER() as rn FROM {}) t 
-			 JOIN sample_indices si ON t.rn = si.rn",
-			values_sql, table_name
-		);
-
-		let result = ctx.sql(&sql).await?;
-		Ok(result)
 	}
+
+	// Emit in original input order for predictable, stable output.
+	reservoir.sort_by_key(|(idx, _)| *idx);
+	let rows: Vec<RecordBatch> = reservoir.into_iter().map(|(_, b)| b).collect();
+
+	let out_ctx = crate::utils::create_context_with_jobs(jobs).await?;
+	if rows.is_empty() {
+		return Ok(out_ctx.read_batch(RecordBatch::new_empty(schema))?);
+	}
+	let combined = concat_batches(&schema, &rows)?;
+	Ok(out_ctx.read_batch(combined)?)
+}
+
+/// Deep-copy a single row into a standalone one-row batch (owned buffers, so it
+/// does not pin the parent batch's memory).
+fn copy_row(batch: &RecordBatch, row: usize) -> NailResult<RecordBatch> {
+	let indices = UInt64Array::from(vec![row as u64]);
+	let columns = batch
+		.columns()
+		.iter()
+		.map(|c| take(c, &indices, None))
+		.collect::<Result<Vec<_>, _>>()?;
+	Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
 async fn sample_stratified(
@@ -173,6 +176,16 @@ async fn sample_stratified(
 	let ctx = crate::utils::create_context_with_jobs(jobs).await?;
 	let table_name = "temp_table";
 	ctx.register_table(table_name, df.clone().into_view())?;
+
+	// Preserve the original schema: the internal row-number helper column used
+	// for deterministic seeding must be projected away before returning.
+	let original_cols: Vec<String> = df
+		.schema()
+		.fields()
+		.iter()
+		.map(|f| f.name().clone())
+		.collect();
+	let original_col_refs: Vec<&str> = original_cols.iter().map(|s| s.as_str()).collect();
 
 	// Find the actual column name (case-insensitive matching)
 	let schema = df.schema();
@@ -277,12 +290,12 @@ async fn sample_stratified(
 			// Deterministic sampling with seed
 			format!(
 				"WITH cat_data AS (
-                    SELECT *, ROW_NUMBER() OVER() as cat_rn 
-                    FROM {} 
+                    SELECT *, ROW_NUMBER() OVER() as __nail_row_id
+                    FROM {}
                     WHERE \"{}\" = '{}'
                 )
-                SELECT * FROM cat_data 
-                WHERE ABS(HASH(CAST(cat_rn AS VARCHAR) || '{}')) % 1000000 < {}
+                SELECT * FROM cat_data
+                WHERE ABS(HASH(CAST(__nail_row_id AS VARCHAR) || '{}')) % 1000000 < {}
                 LIMIT {}",
 				table_name,
 				actual_col_name,
@@ -311,5 +324,6 @@ async fn sample_stratified(
 	}
 
 	let result_df = combined.ok_or_else(|| NailError::Statistics("No data sampled".to_string()))?;
-	Ok(result_df)
+	// Seeded sampling adds an internal row-number column; restore original schema.
+	Ok(result_df.select_columns(&original_col_refs)?)
 }

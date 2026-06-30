@@ -108,15 +108,38 @@ async fn perform_keyed_diff(
 		select_cols.push(format!("COALESCE(l.\"{0}\", r.\"{0}\") as \"{0}\"", key));
 	}
 
+	// Build a per-column inequality test across the non-key columns so we can
+	// distinguish a genuinely MODIFIED row from one that matched on its key but
+	// is otherwise identical. `IS DISTINCT FROM` treats NULLs as comparable
+	// values (NULL vs non-NULL counts as different; NULL vs NULL does not).
+	let non_key_cols: Vec<&String> = left_schema
+		.fields()
+		.iter()
+		.map(|f| f.name())
+		.filter(|n| !keys.contains(*n))
+		.collect();
+	let modified_predicate = if non_key_cols.is_empty() {
+		// No non-key columns to compare: a key match is always UNCHANGED.
+		"FALSE".to_string()
+	} else {
+		non_key_cols
+			.iter()
+			.map(|n| format!("(l.\"{0}\" IS DISTINCT FROM r.\"{0}\")", n))
+			.collect::<Vec<_>>()
+			.join(" OR ")
+	};
+
 	// Add a status column to indicate the type of difference
-	select_cols.push(
+	select_cols.push(format!(
 		"CASE \
-			WHEN l.\"{}\" IS NULL THEN 'ADDED' \
-			WHEN r.\"{}\" IS NULL THEN 'REMOVED' \
-			ELSE 'MODIFIED' \
-		END as diff_status"
-			.replace("{}", keys.first().unwrap()),
-	);
+			WHEN l.\"{key}\" IS NULL THEN 'ADDED' \
+			WHEN r.\"{key}\" IS NULL THEN 'REMOVED' \
+			WHEN {pred} THEN 'MODIFIED' \
+			ELSE 'UNCHANGED' \
+		END as diff_status",
+		key = keys.first().unwrap(),
+		pred = modified_predicate,
+	));
 
 	// Add all non-key columns with left/right prefixes
 	for field in left_schema.fields() {
@@ -182,15 +205,30 @@ async fn perform_row_diff(
 	let left_schema = left_df.schema();
 	let mut select_cols = vec!["COALESCE(l.row_num, r.row_num) as row_num".to_string()];
 
+	// Compare every data column for rows that line up by position, so a row
+	// present in both sides is reported as MODIFIED only when a value actually
+	// differs (NULL-aware via `IS DISTINCT FROM`).
+	let data_cols: Vec<&String> = left_schema.fields().iter().map(|f| f.name()).collect();
+	let modified_predicate = if data_cols.is_empty() {
+		"FALSE".to_string()
+	} else {
+		data_cols
+			.iter()
+			.map(|n| format!("(l.\"{0}\" IS DISTINCT FROM r.\"{0}\")", n))
+			.collect::<Vec<_>>()
+			.join(" OR ")
+	};
+
 	// Add status column
-	select_cols.push(
+	select_cols.push(format!(
 		"CASE \
 			WHEN l.row_num IS NULL THEN 'ADDED' \
 			WHEN r.row_num IS NULL THEN 'REMOVED' \
-			ELSE 'EXISTS' \
-		END as diff_status"
-			.to_string(),
-	);
+			WHEN {pred} THEN 'MODIFIED' \
+			ELSE 'UNCHANGED' \
+		END as diff_status",
+		pred = modified_predicate,
+	));
 
 	// Add columns with left/right prefixes
 	for field in left_schema.fields() {
@@ -218,6 +256,8 @@ async fn perform_row_diff(
 		result_df = result_df.filter(col("diff_status").eq(lit("REMOVED")))?;
 	} else if args.right_only {
 		result_df = result_df.filter(col("diff_status").eq(lit("ADDED")))?;
+	} else if args.changes_only {
+		result_df = result_df.filter(col("diff_status").not_eq(lit("UNCHANGED")))?;
 	}
 
 	Ok(result_df)

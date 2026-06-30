@@ -2,10 +2,8 @@ use std::path::Path;
 
 use crate::cli::CommonArgs;
 use crate::error::{NailError, NailResult};
-use crate::utils::io::{read_data, read_data_with_opts};
+use crate::utils::io::{configured_write_compression, read_data, read_data_with_opts};
 use clap::Args;
-use datafusion::dataframe::DataFrameWriteOptions;
-use datafusion::parquet::basic::Compression;
 use datafusion::parquet::file::properties::{WriterProperties, WriterVersion};
 use datafusion::prelude::*;
 
@@ -16,15 +14,6 @@ use datafusion::prelude::*;
 pub struct OptimizeArgs {
 	#[command(flatten)]
 	pub common: CommonArgs,
-
-	/// Compression type
-	#[arg(long, default_value = "snappy", help = "Compression type")]
-	#[arg(value_enum)]
-	pub compression: CompressionType,
-
-	/// Compression level (1-9)
-	#[arg(long, default_value = "6", help = "Compression level (1-9)")]
-	pub compression_level: u32,
 
 	/// Sort by columns for better compression (comma-separated)
 	#[arg(
@@ -50,92 +39,22 @@ pub struct OptimizeArgs {
 	pub validate: bool,
 }
 
-#[derive(clap::ValueEnum, Clone, Debug)]
-pub enum CompressionType {
-	Snappy,
-	Gzip,
-	Zstd,
-	Brotli,
-}
-
-impl CompressionType {
-	fn to_parquet_compression(&self, level: i32) -> Compression {
-		match self {
-			CompressionType::Snappy => Compression::SNAPPY,
-			CompressionType::Gzip => {
-				use datafusion::parquet::basic::GzipLevel;
-				let gzip_level = match level {
-					1 => GzipLevel::try_new(1).unwrap_or_default(),
-					2 => GzipLevel::try_new(2).unwrap_or_default(),
-					3 => GzipLevel::try_new(3).unwrap_or_default(),
-					4 => GzipLevel::try_new(4).unwrap_or_default(),
-					5 => GzipLevel::try_new(5).unwrap_or_default(),
-					6 => GzipLevel::try_new(6).unwrap_or_default(),
-					7 => GzipLevel::try_new(7).unwrap_or_default(),
-					8 => GzipLevel::try_new(8).unwrap_or_default(),
-					9 => GzipLevel::try_new(9).unwrap_or_default(),
-					_ => GzipLevel::try_new(6).unwrap_or_default(), // Default to 6
-				};
-				Compression::GZIP(gzip_level)
-			}
-			CompressionType::Zstd => {
-				use datafusion::parquet::basic::ZstdLevel;
-				let zstd_level = match level {
-					1 => ZstdLevel::try_new(1).unwrap_or_default(),
-					2 => ZstdLevel::try_new(2).unwrap_or_default(),
-					3 => ZstdLevel::try_new(3).unwrap_or_default(),
-					4 => ZstdLevel::try_new(4).unwrap_or_default(),
-					5 => ZstdLevel::try_new(5).unwrap_or_default(),
-					6 => ZstdLevel::try_new(6).unwrap_or_default(),
-					7 => ZstdLevel::try_new(7).unwrap_or_default(),
-					8 => ZstdLevel::try_new(8).unwrap_or_default(),
-					9 => ZstdLevel::try_new(9).unwrap_or_default(),
-					_ => ZstdLevel::try_new(6).unwrap_or_default(), // Default to 6
-				};
-				Compression::ZSTD(zstd_level)
-			}
-			CompressionType::Brotli => {
-				use datafusion::parquet::basic::BrotliLevel;
-				let brotli_level = match level {
-					1 => BrotliLevel::try_new(1).unwrap_or_default(),
-					2 => BrotliLevel::try_new(2).unwrap_or_default(),
-					3 => BrotliLevel::try_new(3).unwrap_or_default(),
-					4 => BrotliLevel::try_new(4).unwrap_or_default(),
-					5 => BrotliLevel::try_new(5).unwrap_or_default(),
-					6 => BrotliLevel::try_new(6).unwrap_or_default(),
-					7 => BrotliLevel::try_new(7).unwrap_or_default(),
-					8 => BrotliLevel::try_new(8).unwrap_or_default(),
-					9 => BrotliLevel::try_new(9).unwrap_or_default(),
-					_ => BrotliLevel::try_new(6).unwrap_or_default(), // Default to 6
-				};
-				Compression::BROTLI(brotli_level)
-			}
-		}
-	}
-}
-
 pub async fn execute(args: OptimizeArgs) -> NailResult<()> {
 	args.common.log_if_verbose(&format!(
 		"Optimizing Parquet file: {}",
 		args.common.input.display()
 	));
-	args.common.log_if_verbose(&format!(
-		"Compression: {:?} (level {})",
-		args.compression, args.compression_level
-	));
+	// Compression comes from the global `--compression`/`--compression-level`
+	// flags (defaults to SNAPPY when unset).
+	let compression = configured_write_compression();
+	args.common
+		.log_if_verbose(&format!("Compression: {:?}", compression));
 	if let Some(ref cols) = args.sort_by {
 		args.common
 			.log_if_verbose(&format!("Sorting by columns: {}", cols));
 	}
 	args.common
 		.log_if_verbose(&format!("Row group size: {}", args.row_group_size));
-
-	// Validate compression level
-	if args.compression_level < 1 || args.compression_level > 9 {
-		return Err(NailError::InvalidArgument(
-			"Compression level must be between 1 and 9".to_string(),
-		));
-	}
 
 	// Dictionary encoding logic
 	let use_dictionary = if args.dictionary && args.no_dictionary {
@@ -211,10 +130,6 @@ pub async fn execute(args: OptimizeArgs) -> NailResult<()> {
 	));
 
 	// Configure writer properties
-	let compression = args
-		.compression
-		.to_parquet_compression(args.compression_level as i32);
-
 	let mut props_builder = WriterProperties::builder()
 		.set_writer_version(WriterVersion::PARQUET_2_0)
 		.set_compression(compression)
@@ -273,30 +188,43 @@ pub async fn execute(args: OptimizeArgs) -> NailResult<()> {
 async fn write_optimized_parquet(
 	df: &DataFrame,
 	path: &Path,
-	_writer_props: WriterProperties,
+	writer_props: WriterProperties,
 ) -> NailResult<()> {
+	use datafusion::parquet::arrow::ArrowWriter;
+	use futures::StreamExt;
+	use std::fs::File;
+	use std::sync::Arc;
+
 	// Check if DataFrame is empty and handle it specially
 	let row_count = df.clone().count().await.map_err(NailError::DataFusion)?;
 	if row_count == 0 {
 		// Use the same empty file handling as in write_data
 		crate::utils::io::write_empty_parquet_file(df, path).await?;
 	} else {
-		// Use the lower-level approach to write with custom WriterProperties
+		// Stream record batches through the low-level Arrow writer so the
+		// caller-supplied WriterProperties (compression, level, dictionary,
+		// row-group size) are actually applied to the output file.
+		let arrow_schema = Arc::new(df.schema().as_arrow().clone());
+		let file = File::create(path).map_err(NailError::Io)?;
+		let mut writer =
+			ArrowWriter::try_new(file, arrow_schema, Some(writer_props)).map_err(|e| {
+				NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))
+			})?;
 
-		let write_options = DataFrameWriteOptions::new().with_single_file_output(true);
-
-		// Note: This is a limitation in the current DataFusion API version
-		// The WriterProperties are built correctly but can't be passed directly
-		// In a future version, this should be updated to use the writer_props parameter
-		// For now, DataFusion will use its default compression and settings
-		df.clone()
-			.write_parquet(
-				path.to_str().unwrap(),
-				write_options,
-				None, // Use default options for now
-			)
+		let mut stream = df
+			.clone()
+			.execute_stream()
 			.await
 			.map_err(NailError::DataFusion)?;
+		while let Some(batch_res) = stream.next().await {
+			let batch = batch_res.map_err(NailError::DataFusion)?;
+			writer.write(&batch).map_err(|e| {
+				NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))
+			})?;
+		}
+		writer.close().map_err(|e| {
+			NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))
+		})?;
 	}
 
 	Ok(())
@@ -414,8 +342,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 6,
 			sort_by: None,
 			row_group_size: 1000000,
 			dictionary: false,
@@ -457,8 +383,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Gzip,
-			compression_level: 3,
 			sort_by: Some("a,b".to_string()),
 			row_group_size: 100,
 			dictionary: true,
@@ -481,45 +405,34 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_optimize_different_compression_types() {
-		let compression_types = vec![
-			CompressionType::Snappy,
-			CompressionType::Gzip,
-			CompressionType::Zstd,
-			CompressionType::Brotli,
-		];
+	async fn test_optimize_default_compression_codec() {
+		// Compression now comes from the global flag; with it unset the writer
+		// falls back to SNAPPY. This exercises the default optimize write path.
+		let (_temp_dir, input_path) = create_test_data();
+		let output_dir = tempdir().unwrap();
+		let output_path = output_dir.path().join("default_compressed.parquet");
 
-		for compression in compression_types {
-			let (_temp_dir, input_path) = create_test_data();
-			let output_dir = tempdir().unwrap();
-			let output_path = output_dir
-				.path()
-				.join(format!("{:?}_compressed.parquet", compression));
+		let args = OptimizeArgs {
+			common: CommonArgs {
+				input: input_path,
+				output: Some(output_path.clone()),
+				format: None,
+				random: None,
+				batch_size: None,
+				verbose: false,
+				jobs: None,
+				table: false,
+				level: 1,
+			},
+			sort_by: None,
+			row_group_size: 500,
+			dictionary: false,
+			no_dictionary: false,
+			validate: false,
+		};
 
-			let args = OptimizeArgs {
-				common: CommonArgs {
-					input: input_path,
-					output: Some(output_path.clone()),
-					format: None,
-					random: None,
-					batch_size: None,
-					verbose: false,
-					jobs: None,
-					table: false,
-					level: 1,
-				},
-				compression: compression.clone(),
-				compression_level: 5,
-				sort_by: None,
-				row_group_size: 500,
-				dictionary: false,
-				no_dictionary: false,
-				validate: false,
-			};
-
-			execute(args).await.unwrap();
-			assert!(output_path.exists());
-		}
+		execute(args).await.unwrap();
+		assert!(output_path.exists());
 	}
 
 	#[tokio::test]
@@ -540,8 +453,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Zstd,
-			compression_level: 4,
 			sort_by: Some("id".to_string()),
 			row_group_size: 250,
 			dictionary: false,
@@ -563,39 +474,6 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn test_optimize_invalid_compression_level() {
-		let (_temp_dir, input_path) = create_test_data();
-
-		let args = OptimizeArgs {
-			common: CommonArgs {
-				input: input_path,
-				output: None,
-				format: None,
-				random: None,
-				batch_size: None,
-				verbose: false,
-				jobs: None,
-				table: false,
-				level: 1,
-			},
-			compression: CompressionType::Snappy,
-			compression_level: 10, // Invalid level
-			sort_by: None,
-			row_group_size: 1000,
-			dictionary: false,
-			no_dictionary: false,
-			validate: false,
-		};
-
-		let result = execute(args).await;
-		assert!(result.is_err());
-		assert!(result
-			.unwrap_err()
-			.to_string()
-			.contains("Compression level must be between 1 and 9"));
-	}
-
-	#[tokio::test]
 	async fn test_optimize_conflicting_dictionary_flags() {
 		let (_temp_dir, input_path) = create_test_data();
 
@@ -611,8 +489,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 1000,
 			dictionary: true,
@@ -644,8 +520,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: Some("nonexistent_column".to_string()),
 			row_group_size: 1000,
 			dictionary: false,
@@ -674,8 +548,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 1000,
 			dictionary: false,
@@ -708,8 +580,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 1000,
 			dictionary: true, // Enable dictionary
@@ -739,8 +609,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 1000,
 			dictionary: false,
@@ -770,8 +638,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 100, // Small row group size
 			dictionary: false,
@@ -809,8 +675,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Gzip,
-			compression_level: 3,
 			sort_by: Some("category,name,id".to_string()), // Multiple columns
 			row_group_size: 200,
 			dictionary: false,
@@ -862,8 +726,6 @@ mod tests {
 				table: false,
 				level: 1,
 			},
-			compression: CompressionType::Snappy,
-			compression_level: 5,
 			sort_by: None,
 			row_group_size: 1000,
 			dictionary: false,
@@ -886,6 +748,9 @@ mod tests {
 
 	#[test]
 	fn test_compression_type_conversion() {
+		use crate::utils::io::CompressionType;
+		use parquet::basic::Compression;
+
 		assert!(matches!(
 			CompressionType::Snappy.to_parquet_compression(5),
 			Compression::SNAPPY
