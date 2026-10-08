@@ -73,8 +73,10 @@ impl<'a> OutputHandler<'a> {
 	fn map_output_format(&self, format: &Option<OutputFormat>) -> Option<FileFormat> {
 		match format {
 			Some(OutputFormat::Json) => Some(FileFormat::Json),
+			Some(OutputFormat::Jsonl) => Some(FileFormat::Jsonl),
 			Some(OutputFormat::Csv) => Some(FileFormat::Csv),
 			Some(OutputFormat::Parquet) => Some(FileFormat::Parquet),
+			Some(OutputFormat::Arrow) => Some(FileFormat::Arrow),
 			Some(OutputFormat::Xlsx) => Some(FileFormat::Excel),
 			Some(OutputFormat::Text) | None => None,
 		}

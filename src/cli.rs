@@ -143,8 +143,10 @@ impl CommonArgs {
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum OutputFormat {
 	Json,
+	Jsonl,
 	Text,
 	Csv,
 	Parquet,
+	Arrow,
 	Xlsx,
 }

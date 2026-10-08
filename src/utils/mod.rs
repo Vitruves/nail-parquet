@@ -52,6 +52,9 @@ pub fn detect_file_format(path: &Path) -> NailResult<FileFormat> {
 		Some("parquet") => Ok(FileFormat::Parquet),
 		Some("csv") => Ok(FileFormat::Csv),
 		Some("json") => Ok(FileFormat::Json),
+		Some("jsonl") | Some("ndjson") => Ok(FileFormat::Jsonl),
+		// Feather v2 is the Arrow IPC file format under a different name.
+		Some("arrow") | Some("ipc") | Some("feather") => Ok(FileFormat::Arrow),
 		Some("xlsx") => Ok(FileFormat::Excel),
 		_ => Err(NailError::UnsupportedFormat(format!(
 			"Unable to detect format for file: {}",
@@ -65,5 +68,52 @@ pub enum FileFormat {
 	Parquet,
 	Csv,
 	Json,
+	/// Newline-delimited JSON (`.jsonl`, `.ndjson`). Same wire format as `Json`,
+	/// kept separate so generated filenames keep the extension the user asked for.
+	Jsonl,
+	/// Arrow IPC, either the file format (`ARROW1` magic + footer) or the stream
+	/// format written by e.g. HuggingFace `datasets.save_to_disk`.
+	Arrow,
 	Excel,
+}
+
+impl FileFormat {
+	/// Canonical file extension (without the dot) for this format.
+	pub fn extension(&self) -> &'static str {
+		match self {
+			FileFormat::Parquet => "parquet",
+			FileFormat::Csv => "csv",
+			FileFormat::Json => "json",
+			FileFormat::Jsonl => "jsonl",
+			FileFormat::Arrow => "arrow",
+			FileFormat::Excel => "xlsx",
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn ext_of(name: &str) -> Option<&'static str> {
+		detect_file_format(Path::new(name)).ok().map(|f| {
+			let e: &'static str = f.extension();
+			e
+		})
+	}
+
+	#[test]
+	fn detects_supported_extensions() {
+		assert_eq!(ext_of("a.parquet"), Some("parquet"));
+		assert_eq!(ext_of("a.csv"), Some("csv"));
+		assert_eq!(ext_of("a.json"), Some("json"));
+		assert_eq!(ext_of("a.jsonl"), Some("jsonl"));
+		assert_eq!(ext_of("a.ndjson"), Some("jsonl"));
+		assert_eq!(ext_of("data-00000-of-00001.arrow"), Some("arrow"));
+		assert_eq!(ext_of("a.ipc"), Some("arrow"));
+		assert_eq!(ext_of("a.feather"), Some("arrow"));
+		assert_eq!(ext_of("a.xlsx"), Some("xlsx"));
+		assert_eq!(ext_of("a.txt"), None);
+		assert_eq!(ext_of("noext"), None);
+	}
 }

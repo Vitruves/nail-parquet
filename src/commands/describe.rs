@@ -41,6 +41,8 @@ pub async fn execute(args: DescribeArgs) -> NailResult<()> {
 		Some("parquet") => "Parquet",
 		Some("csv") => "CSV",
 		Some("json") => "JSON",
+		Some("jsonl") | Some("ndjson") => "JSON Lines",
+		Some("arrow") | Some("ipc") | Some("feather") => "Arrow IPC",
 		Some("xlsx") => "Excel",
 		_ => "Unknown",
 	};

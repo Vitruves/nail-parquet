@@ -7,7 +7,8 @@ use std::path::PathBuf;
 #[derive(Args, Clone)]
 #[command(after_help = "Examples:
   nail convert data.csv -o data.parquet
-  nail convert data.parquet -o data.json")]
+  nail convert data.parquet -o data.json
+  nail convert data.arrow -o data.jsonl")]
 pub struct ConvertArgs {
 	#[arg(help = "Input file")]
 	pub input: PathBuf,
@@ -20,6 +21,8 @@ pub struct ConvertArgs {
 	                           • Parquet (.parquet)\n\
 	                           • CSV (.csv)\n\
 	                           • JSON (.json)\n\
+	                           • JSON Lines (.jsonl, .ndjson)\n\
+	                           • Arrow IPC (.arrow, .ipc, .feather)\n\
 	                           • Excel (.xlsx) - write support"
 	)]
 	pub output: PathBuf,

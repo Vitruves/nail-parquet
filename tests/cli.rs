@@ -1128,6 +1128,161 @@ mod format_and_analysis_tests {
 		assert_eq!(get_row_count(&parquet_output).await, 5);
 	}
 
+	#[tokio::test]
+	async fn test_convert_arrow_ipc_round_trip() {
+		let fixtures = TestFixtures::new();
+		let arrow_output = fixtures.get_output_path("converted.arrow");
+		nail()
+			.args([
+				"convert",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o",
+				arrow_output.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		// Written as the IPC file format, so it is self-contained and seekable.
+		let bytes = fs::read(&arrow_output).unwrap();
+		assert_eq!(&bytes[0..6], b"ARROW1");
+
+		let parquet_output = fixtures.get_output_path("from_arrow.parquet");
+		nail()
+			.args([
+				"convert",
+				arrow_output.to_str().unwrap(),
+				"-o",
+				parquet_output.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&parquet_output).await, 5);
+	}
+
+	/// HuggingFace `datasets.save_to_disk` names its shards `*.arrow` but writes the
+	/// Arrow IPC *stream* format, which has no magic bytes and no footer.
+	#[test]
+	fn test_read_arrow_ipc_stream_format() {
+		use arrow::array::{Int64Array, StringArray};
+		use arrow::ipc::writer::StreamWriter;
+		use arrow::record_batch::RecordBatch;
+		use arrow_schema::{DataType, Field, Schema};
+		use std::sync::Arc;
+
+		let fixtures = TestFixtures::new();
+		let path = fixtures.get_output_path("data-00000-of-00001.arrow");
+
+		let schema = Arc::new(Schema::new(vec![
+			Field::new("id", DataType::Int64, false),
+			Field::new("text", DataType::Utf8, false),
+		]));
+		let batch = RecordBatch::try_new(
+			schema.clone(),
+			vec![
+				Arc::new(Int64Array::from(vec![1, 2, 3])),
+				Arc::new(StringArray::from(vec!["First", "Second", "Third"])),
+			],
+		)
+		.unwrap();
+		{
+			let file = fs::File::create(&path).unwrap();
+			let mut writer = StreamWriter::try_new(file, &schema).unwrap();
+			writer.write(&batch).unwrap();
+			writer.finish().unwrap();
+		}
+		assert_ne!(&fs::read(&path).unwrap()[0..6], b"ARROW1");
+
+		nail()
+			.args(["count", path.to_str().unwrap()])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("3"));
+		nail()
+			.args(["head", path.to_str().unwrap(), "--table"])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("Second"));
+	}
+
+	#[tokio::test]
+	async fn test_convert_jsonl_round_trip() {
+		let fixtures = TestFixtures::new();
+		let jsonl_output = fixtures.get_output_path("converted.jsonl");
+		nail()
+			.args([
+				"convert",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o",
+				jsonl_output.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		let contents = fs::read_to_string(&jsonl_output).unwrap();
+		let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+		assert_eq!(lines.len(), 5);
+		for line in &lines {
+			let _: Value = serde_json::from_str(line).unwrap();
+		}
+
+		let parquet_output = fixtures.get_output_path("from_jsonl.parquet");
+		nail()
+			.args([
+				"convert",
+				jsonl_output.to_str().unwrap(),
+				"-o",
+				parquet_output.to_str().unwrap(),
+			])
+			.assert()
+			.success();
+		assert_eq!(get_row_count(&parquet_output).await, 5);
+	}
+
+	#[test]
+	fn test_read_ndjson_extension() {
+		let fixtures = TestFixtures::new();
+		let path = fixtures.get_output_path("data.ndjson");
+		fs::write(&path, "{\"a\":1}\n{\"a\":2}\n").unwrap();
+		nail()
+			.args(["count", path.to_str().unwrap()])
+			.assert()
+			.success()
+			.stdout(predicate::str::contains("2"));
+	}
+
+	#[test]
+	fn test_format_flag_arrow_and_jsonl() {
+		let fixtures = TestFixtures::new();
+		// `--format` wins over the output file's extension.
+		let out = fixtures.get_output_path("explicit_format.bin");
+		nail()
+			.args([
+				"head",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o",
+				out.to_str().unwrap(),
+				"--format",
+				"arrow",
+			])
+			.assert()
+			.success();
+		assert_eq!(&fs::read(&out).unwrap()[0..6], b"ARROW1");
+
+		let out_jsonl = fixtures.get_output_path("explicit_format.txt");
+		nail()
+			.args([
+				"head",
+				fixtures.sample_parquet.to_str().unwrap(),
+				"-o",
+				out_jsonl.to_str().unwrap(),
+				"--format",
+				"jsonl",
+			])
+			.assert()
+			.success();
+		let contents = fs::read_to_string(&out_jsonl).unwrap();
+		let first = contents.lines().next().unwrap();
+		let _: Value = serde_json::from_str(first).unwrap();
+	}
+
 	#[test]
 	fn test_stats_all_types() {
 		let fixtures = TestFixtures::new();

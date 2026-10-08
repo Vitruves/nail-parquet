@@ -1,0 +1,102 @@
+name: PyPI
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual runs build the wheels without publishing (dry run).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  wheels:
+    name: Wheel ${{ matrix.target }} ${{ matrix.manylinux }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux (glibc)
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            manylinux: auto
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            manylinux: auto
+          # Linux (musl, e.g. Alpine)
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            manylinux: musllinux_1_2
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            manylinux: musllinux_1_2
+          # macOS
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            manylinux: ''
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            manylinux: ''
+          # Windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            manylinux: ''
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist
+          sccache: 'true'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    environment:
+      name: pypi
+      url: https://pypi.org/project/nail-parquet/
+    permissions:
+      id-token: write  # PyPI trusted publishing (OIDC), no API token needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Re-tags of an already published version (e.g. v1.7.1_1) are a no-op.
+          skip-existing: true

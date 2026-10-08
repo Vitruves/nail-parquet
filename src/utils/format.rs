@@ -98,17 +98,13 @@ pub async fn display_dataframe_with_mode(
 		Some(path) => {
 			let file_format = match format {
 				Some(OutputFormat::Json) => Some(FileFormat::Json),
+				Some(OutputFormat::Jsonl) => Some(FileFormat::Jsonl),
 				Some(OutputFormat::Csv) => Some(FileFormat::Csv),
 				Some(OutputFormat::Parquet) => Some(FileFormat::Parquet),
+				Some(OutputFormat::Arrow) => Some(FileFormat::Arrow),
 				Some(OutputFormat::Xlsx) => Some(FileFormat::Excel),
 				Some(OutputFormat::Text) | None => {
-					match path.extension().and_then(|s| s.to_str()) {
-						Some("json") => Some(FileFormat::Json),
-						Some("csv") => Some(FileFormat::Csv),
-						Some("parquet") => Some(FileFormat::Parquet),
-						Some("xlsx") => Some(FileFormat::Excel),
-						_ => Some(FileFormat::Parquet),
-					}
+					Some(crate::utils::detect_file_format(path).unwrap_or(FileFormat::Parquet))
 				}
 			};
 
@@ -116,7 +112,7 @@ pub async fn display_dataframe_with_mode(
 		}
 		None => {
 			match format {
-				Some(OutputFormat::Json) => {
+				Some(OutputFormat::Json) | Some(OutputFormat::Jsonl) => {
 					display_as_json(df, level).await?;
 				}
 				Some(OutputFormat::Text) | None => {
@@ -130,7 +126,7 @@ pub async fn display_dataframe_with_mode(
 				}
 				_ => {
 					return Err(crate::error::NailError::InvalidArgument(
-						"CSV and Parquet formats require an output file".to_string(),
+						"CSV, Parquet, Arrow and Excel formats require an output file".to_string(),
 					));
 				}
 			}

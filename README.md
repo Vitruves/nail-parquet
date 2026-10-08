@@ -1,15 +1,33 @@
+<p align="center">
+  <img src="assets/banner.jpg" alt="nail — lightning-fast data analysis CLI for Parquet, CSV, JSON, Arrow and Excel" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://crates.io/crates/nail-parquet"><img src="https://img.shields.io/crates/v/nail-parquet.svg" alt="Crates.io"></a>
+  <a href="https://crates.io/crates/nail-parquet"><img src="https://img.shields.io/crates/d/nail-parquet.svg" alt="Downloads"></a>
+  <a href="https://github.com/Vitruves/nail-parquet/blob/main/LICENSE"><img src="https://img.shields.io/crates/l/nail-parquet.svg" alt="License"></a>
+  <a href="https://www.rust-lang.org"><img src="https://img.shields.io/badge/rust-1.70%2B-blue.svg" alt="Rust"></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick start</a> •
+  <a href="#commands">Commands</a> •
+  <a href="#supported-formats">Formats</a> •
+  <a href="#global-options">Options</a> •
+  <a href="#examples">Examples</a> •
+  <a href="#piping-stdinstdout">Piping</a>
+</p>
+
 # nail - Lightning-Fast Data Analysis CLI
 
-**nail** is a high-performance command-line tool for analyzing, transforming, and exploring Parquet, CSV, JSON, and Excel files. Built with Rust, Apache Arrow, and DataFusion.
+**nail** is a high-performance command-line tool for analyzing, transforming, and exploring Parquet, CSV, JSON, JSON Lines, Arrow IPC, and Excel files. Built with Rust, Apache Arrow, and DataFusion.
 
-Process gigabyte-scale datasets in seconds • SQL-powered • Zero configuration • Works offline • Single binary.
-
-[![Crates.io](https://img.shields.io/crates/v/nail-parquet.svg)](https://crates.io/crates/nail-parquet)
-[![Downloads](https://img.shields.io/crates/d/nail-parquet.svg)](https://crates.io/crates/nail-parquet)
-[![License](https://img.shields.io/crates/l/nail-parquet.svg)](https://github.com/Vitruves/nail-parquet/blob/main/LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org)
-
-![nail_parquet](https://github.com/user-attachments/assets/0251facf-0e9b-49d0-bbd4-5dd8a288997c)
+- **Fast** — gigabyte-scale datasets in seconds, parallel across all CPU cores.
+- **SQL-powered** — DataFusion under the hood, familiar filter and expression syntax.
+- **Zero configuration** — formats are detected from the file extension, on input and output.
+- **Composable** — every command reads stdin and writes stdout, so `nail` pipes into itself and other tools.
+- **Self-contained** — a single binary that works offline.
 
 ## Installation
 
@@ -48,6 +66,17 @@ nix shell nixpkgs#nail-parquet
 ```
 
 **Dependencies:** macOS — none. Linux — `pkg-config` and `openssl`.
+
+## Quick Start
+
+```bash
+nail describe sales.parquet                                    # what is in this file?
+nail head sales.parquet -n 5                                   # look at a few rows
+nail filter sales.parquet -c "revenue > 1000" -o big.parquet   # keep what matters
+nail convert big.parquet -o big.csv                            # hand it to another tool
+```
+
+The package is `nail-parquet` on crates.io; the executable is `nail`.
 
 ## Commands
 
@@ -93,6 +122,27 @@ help          Print this message or the help of the given subcommand(s)
 
 Run `nail <command> --help` for full usage.
 
+## Supported Formats
+
+Formats are detected from the file extension on both input and output, and can be forced with `-f/--format`.
+
+| Format | Extensions | Read | Write |
+|--------|-----------|------|-------|
+| Parquet | `.parquet` | yes | yes |
+| CSV | `.csv` | yes | yes |
+| JSON (newline-delimited) | `.json` | yes | yes |
+| JSON Lines | `.jsonl`, `.ndjson` | yes | yes |
+| Arrow IPC / Feather v2 | `.arrow`, `.ipc`, `.feather` | yes | yes |
+| Excel | `.xlsx` | yes | yes |
+
+Both Arrow IPC flavours are read: the file format (`ARROW1` magic + footer) and the stream format written by e.g. HuggingFace `datasets.save_to_disk`. Writes always produce the self-contained file format.
+
+```bash
+nail head dummy_dataset/data-00000-of-00001.arrow
+nail convert dummy_dataset/data-00000-of-00001.arrow -o dummy.jsonl
+nail filter events.jsonl -c "status == 'error'" -o errors.arrow
+```
+
 ## Global Options
 
 Available on all commands:
@@ -102,7 +152,7 @@ Available on all commands:
 | `-v, --verbose` | Timing and progress output |
 | `-j, --jobs N` | Parallel jobs (default: all CPU cores) |
 | `-o, --output FILE` | Output file, or `-` for stdout (prints a table to the console if omitted) |
-| `-f, --format FORMAT` | Output format: `json`, `csv`, `parquet`, `text`, `xlsx` |
+| `-f, --format FORMAT` | Output format: `json`, `jsonl`, `csv`, `parquet`, `arrow`, `text`, `xlsx` |
 | `--batch-size N` | DataFusion batch size (rows per record batch) |
 | `--table` | Display console output as a columnar table instead of cards |
 | `--random N` | Random seed for reproducible results |

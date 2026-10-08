@@ -405,18 +405,18 @@ fn determine_output_format(
 ) -> Option<crate::utils::FileFormat> {
 	match format {
 		Some(crate::cli::OutputFormat::Json) => Some(crate::utils::FileFormat::Json),
+		Some(crate::cli::OutputFormat::Jsonl) => Some(crate::utils::FileFormat::Jsonl),
 		Some(crate::cli::OutputFormat::Csv) => Some(crate::utils::FileFormat::Csv),
 		Some(crate::cli::OutputFormat::Parquet) => Some(crate::utils::FileFormat::Parquet),
+		Some(crate::cli::OutputFormat::Arrow) => Some(crate::utils::FileFormat::Arrow),
+		Some(crate::cli::OutputFormat::Xlsx) => Some(crate::utils::FileFormat::Excel),
 		_ => crate::utils::detect_file_format(input_path).ok(),
 	}
 }
 
 fn get_extension_for_format(format: &Option<crate::utils::FileFormat>) -> String {
 	match format {
-		Some(crate::utils::FileFormat::Json) => "json".to_string(),
-		Some(crate::utils::FileFormat::Csv) => "csv".to_string(),
-		Some(crate::utils::FileFormat::Parquet) => "parquet".to_string(),
-		Some(crate::utils::FileFormat::Excel) => "xlsx".to_string(),
+		Some(f) => f.extension().to_string(),
 		None => "parquet".to_string(), // Default
 	}
 }

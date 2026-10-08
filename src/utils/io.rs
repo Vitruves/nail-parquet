@@ -114,6 +114,13 @@ async fn read_data_in(path: &Path, ctx: &SessionContext) -> NailResult<DataFusio
 	let path_str = path
 		.to_str()
 		.ok_or_else(|| NailError::InvalidArgument(format!("Non-UTF8 path: {}", path.display())))?;
+	// DataFusion only lists files whose extension matches the read options, so
+	// aliases like `.jsonl`/`.ndjson`/`.ipc` must be passed through explicitly.
+	let dotted_ext = path
+		.extension()
+		.and_then(|s| s.to_str())
+		.map(|e| format!(".{}", e))
+		.unwrap_or_default();
 
 	let result = match format {
 		FileFormat::Parquet => {
@@ -125,11 +132,84 @@ async fn read_data_in(path: &Path, ctx: &SessionContext) -> NailResult<DataFusio
 			ctx.read_csv(path_str, DataFusionCsvReadOptions::default())
 				.await
 		}
-		FileFormat::Json => ctx.read_json(path_str, NdJsonReadOptions::default()).await,
+		FileFormat::Json | FileFormat::Jsonl => {
+			ctx.read_json(
+				path_str,
+				NdJsonReadOptions::default().file_extension(&dotted_ext),
+			)
+			.await
+		}
+		FileFormat::Arrow => return read_arrow_file(path, path_str, &dotted_ext, ctx).await,
 		FileFormat::Excel => read_excel_file(path, ctx).await,
 	};
 
 	result.map_err(NailError::DataFusion)
+}
+
+/// Read an Arrow IPC file. Files carrying the `ARROW1` magic are true IPC *file*
+/// format and go through DataFusion so they stay lazy; everything else is assumed
+/// to be the IPC *stream* format (what HuggingFace `datasets.save_to_disk` writes)
+/// and is decoded sequentially into memory.
+async fn read_arrow_file(
+	path: &Path,
+	path_str: &str,
+	dotted_ext: &str,
+	ctx: &SessionContext,
+) -> NailResult<DataFusionDataFrame> {
+	if has_arrow_file_magic(path)? {
+		let mut opts = datafusion::execution::options::ArrowReadOptions::default();
+		if !dotted_ext.is_empty() {
+			opts.file_extension = dotted_ext;
+		}
+		return ctx
+			.read_arrow(path_str, opts)
+			.await
+			.map_err(NailError::DataFusion);
+	}
+
+	let file = File::open(path).map_err(NailError::Io)?;
+	// The stream reader knows the schema up front, so an empty shard still yields
+	// a usable (0-row) DataFrame instead of an error.
+	let (schema, batches) = read_arrow_stream(std::io::BufReader::new(file))?;
+	let mem = MemTable::try_new(schema, vec![batches]).map_err(NailError::DataFusion)?;
+	ctx.read_table(Arc::new(mem)).map_err(NailError::DataFusion)
+}
+
+/// True when the file starts with the Arrow IPC file-format magic bytes.
+fn has_arrow_file_magic(path: &Path) -> NailResult<bool> {
+	let mut file = File::open(path).map_err(NailError::Io)?;
+	let mut magic = [0u8; 6];
+	match file.read_exact(&mut magic) {
+		Ok(()) => Ok(&magic == b"ARROW1"),
+		Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+		Err(e) => Err(NailError::Io(e)),
+	}
+}
+
+type SchemaRef = Arc<Schema>;
+
+fn read_arrow_stream<R: Read>(reader: R) -> NailResult<(SchemaRef, Vec<RecordBatch>)> {
+	use arrow::ipc::reader::StreamReader;
+	let reader = StreamReader::try_new(reader, None).map_err(NailError::Arrow)?;
+	let schema = reader.schema();
+	let mut batches = Vec::new();
+	for b in reader {
+		batches.push(b.map_err(NailError::Arrow)?);
+	}
+	Ok((schema, batches))
+}
+
+/// Wrap already-decoded batches in an in-memory table.
+fn batches_to_dataframe(
+	ctx: &SessionContext,
+	batches: Vec<RecordBatch>,
+) -> NailResult<DataFusionDataFrame> {
+	let schema = batches
+		.first()
+		.map(|b| b.schema())
+		.ok_or_else(|| NailError::InvalidArgument("No record batches in input".to_string()))?;
+	let mem = MemTable::try_new(schema, vec![batches]).map_err(NailError::DataFusion)?;
+	ctx.read_table(Arc::new(mem)).map_err(NailError::DataFusion)
 }
 
 async fn read_stdin(
@@ -151,7 +231,8 @@ async fn read_stdin(
 	let batches = match format {
 		FileFormat::Parquet => parse_parquet_bytes(&buf)?,
 		FileFormat::Csv => parse_csv_bytes(&buf)?,
-		FileFormat::Json => parse_json_bytes(&buf)?,
+		FileFormat::Json | FileFormat::Jsonl => parse_json_bytes(&buf)?,
+		FileFormat::Arrow => parse_arrow_bytes(&buf)?,
 		FileFormat::Excel => {
 			return Err(NailError::UnsupportedFormat(
 				"Excel (xlsx) cannot be read from stdin; pass a file path".to_string(),
@@ -159,18 +240,26 @@ async fn read_stdin(
 		}
 	};
 
-	let schema = batches
-		.first()
-		.map(|b| b.schema())
-		.ok_or_else(|| NailError::InvalidArgument("Empty input on stdin".to_string()))?;
-	let mem = MemTable::try_new(schema, vec![batches]).map_err(NailError::DataFusion)?;
-	ctx.read_table(Arc::new(mem)).map_err(NailError::DataFusion)
+	if batches.is_empty() {
+		return Err(NailError::InvalidArgument(
+			"Empty input on stdin".to_string(),
+		));
+	}
+	batches_to_dataframe(ctx, batches)
 }
 
 fn sniff_format(buf: &[u8]) -> FileFormat {
 	// Parquet files start (and end) with the "PAR1" magic.
 	if buf.len() >= 4 && &buf[0..4] == b"PAR1" {
 		return FileFormat::Parquet;
+	}
+	// Arrow IPC file format carries a magic; the stream format opens with the
+	// 0xFFFFFFFF continuation marker of its first encapsulated message.
+	if buf.len() >= 6 && &buf[0..6] == b"ARROW1" {
+		return FileFormat::Arrow;
+	}
+	if buf.len() >= 4 && buf[0..4] == [0xFF, 0xFF, 0xFF, 0xFF] {
+		return FileFormat::Arrow;
 	}
 	// First non-whitespace byte tells JSON from CSV.
 	for &b in buf {
@@ -211,6 +300,20 @@ fn parse_csv_bytes(buf: &[u8]) -> NailResult<Vec<RecordBatch>> {
 		batches.push(b.map_err(NailError::Arrow)?);
 	}
 	Ok(batches)
+}
+
+fn parse_arrow_bytes(buf: &[u8]) -> NailResult<Vec<RecordBatch>> {
+	use arrow::ipc::reader::FileReader;
+	let cursor = std::io::Cursor::new(buf);
+	if buf.len() >= 6 && &buf[0..6] == b"ARROW1" {
+		let reader = FileReader::try_new(cursor, None).map_err(NailError::Arrow)?;
+		let mut batches = Vec::new();
+		for b in reader {
+			batches.push(b.map_err(NailError::Arrow)?);
+		}
+		return Ok(batches);
+	}
+	read_arrow_stream(cursor).map(|(_, batches)| batches)
 }
 
 fn parse_json_bytes(buf: &[u8]) -> NailResult<Vec<RecordBatch>> {
@@ -402,12 +505,17 @@ pub async fn write_data(
 	match output_format {
 		FileFormat::Parquet => write_parquet_streaming(df, path).await?,
 		FileFormat::Csv => write_csv_streaming(df, path).await?,
-		FileFormat::Json => {
+		FileFormat::Json | FileFormat::Jsonl => {
 			// Let DataFusion stream JSON directly; it already writes batch-by-batch.
+			// Both variants are newline-delimited, only the extension differs.
 			df.clone()
 				.write_json(path.to_str().unwrap(), DataFrameWriteOptions::new(), None)
 				.await
 				.map_err(NailError::DataFusion)?;
+		}
+		FileFormat::Arrow => {
+			let file = File::create(path).map_err(NailError::Io)?;
+			write_arrow_to_writer(df, std::io::BufWriter::new(file)).await?;
 		}
 		FileFormat::Excel => {
 			write_excel_file(df, path).await?;
@@ -426,11 +534,35 @@ pub async fn write_data_to_stdout(df: &DataFusionDataFrame, format: &FileFormat)
 	match format {
 		FileFormat::Parquet => write_parquet_to_writer(df, writer).await,
 		FileFormat::Csv => write_csv_to_writer(df, writer).await,
-		FileFormat::Json => write_json_to_writer(df, writer).await,
+		FileFormat::Json | FileFormat::Jsonl => write_json_to_writer(df, writer).await,
+		FileFormat::Arrow => write_arrow_to_writer(df, writer).await,
 		FileFormat::Excel => Err(NailError::UnsupportedFormat(
 			"Excel (xlsx) cannot be written to stdout".to_string(),
 		)),
 	}
+}
+
+/// Write the Arrow IPC *file* format (magic + footer) so the result is a
+/// self-contained, independently readable `.arrow` file even on stdout.
+async fn write_arrow_to_writer<W: Write + Send>(
+	df: &DataFusionDataFrame,
+	writer: W,
+) -> NailResult<()> {
+	use arrow::ipc::writer::FileWriter;
+
+	let arrow_schema = df.schema().as_arrow().clone();
+	let mut w = FileWriter::try_new(writer, &arrow_schema).map_err(NailError::Arrow)?;
+	let mut stream = df
+		.clone()
+		.execute_stream()
+		.await
+		.map_err(NailError::DataFusion)?;
+	while let Some(batch_res) = stream.next().await {
+		let batch = batch_res.map_err(NailError::DataFusion)?;
+		w.write(&batch).map_err(NailError::Arrow)?;
+	}
+	w.finish().map_err(NailError::Arrow)?;
+	Ok(())
 }
 
 async fn write_parquet_to_writer<W: Write + Send>(
@@ -749,4 +881,44 @@ pub(crate) async fn write_empty_parquet_file(
 		NailError::DataFusion(datafusion::error::DataFusionError::External(Box::new(e)))
 	})?;
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn sniffs_stdin_formats() {
+		assert!(matches!(sniff_format(b"PAR1...."), FileFormat::Parquet));
+		assert!(matches!(sniff_format(b"ARROW1\0\0"), FileFormat::Arrow));
+		// Arrow IPC stream format opens with the 0xFFFFFFFF continuation marker.
+		assert!(matches!(
+			sniff_format(&[0xFF, 0xFF, 0xFF, 0xFF, 0x10, 0x00]),
+			FileFormat::Arrow
+		));
+		assert!(matches!(sniff_format(b"{\"a\":1}\n"), FileFormat::Json));
+		assert!(matches!(sniff_format(b"  \n[{\"a\":1}]"), FileFormat::Json));
+		assert!(matches!(sniff_format(b"a,b\n1,2\n"), FileFormat::Csv));
+		assert!(matches!(sniff_format(b""), FileFormat::Csv));
+	}
+
+	#[test]
+	fn round_trips_arrow_stream_bytes() {
+		use arrow::ipc::writer::StreamWriter;
+		let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
+		let batch = RecordBatch::try_new(
+			schema.clone(),
+			vec![Arc::new(Int64Array::from(vec![1i64, 2, 3]))],
+		)
+		.unwrap();
+		let mut buf: Vec<u8> = Vec::new();
+		{
+			let mut w = StreamWriter::try_new(&mut buf, &schema).unwrap();
+			w.write(&batch).unwrap();
+			w.finish().unwrap();
+		}
+		let batches = parse_arrow_bytes(&buf).unwrap();
+		assert_eq!(batches.len(), 1);
+		assert_eq!(batches[0].num_rows(), 3);
+	}
 }

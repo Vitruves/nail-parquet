@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+# The version comes from Cargo.toml.
+[project]
+name = "nail-parquet"
+dynamic = ["version"]
+description = "Lightning-fast CLI for data analysis: explore, filter, transform Parquet/CSV/Excel files with SQL-powered operations"
+readme = "README.md"
+requires-python = ">=3.8"
+license = "MIT"
+license-files = ["LICENCE", "THIRD_PARTY_LICENSES"]
+authors = [{ name = "Johan HG Natter" }]
+keywords = ["parquet", "data-analysis", "csv", "datafusion", "etl", "cli", "xlsx", "json"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Repository = "https://github.com/Vitruves/nail-parquet"
+Changelog = "https://github.com/Vitruves/nail-parquet/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Vitruves/nail-parquet/issues"
+
+[tool.maturin]
+bindings = "bin"
+strip = true
+exclude = ["runtime_tests/**", "tests/**", "example_dataset/**"]
