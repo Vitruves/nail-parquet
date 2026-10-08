@@ -25,9 +25,11 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             manylinux: auto
+          # manylinux2014's cross GCC is too old to assemble ring on aarch64
+          # ("ARM assembler must define __ARM_ARCH"), so target glibc 2.28.
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
-            manylinux: auto
+            manylinux: 2_28
           # Linux (musl, e.g. Alpine)
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest

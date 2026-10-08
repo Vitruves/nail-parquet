@@ -4,7 +4,7 @@ All notable changes to `nail-parquet` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project adheres to [Semantic Versioning](https://semver.org/).
 
-## [1.9.1] - unreleased
+## [1.9.1]
 
 ### Added
 - **Arrow IPC (`.arrow`, `.ipc`, `.feather`) read and write support** (#9). Both flavours of the IPC format are read: the file format (`ARROW1` magic + footer), which is read lazily through DataFusion, and the stream format — what HuggingFace `datasets.save_to_disk` writes for its `data-*-of-*.arrow` shards — which has no magic bytes or footer and is decoded sequentially. Writes always produce the self-contained file format, so a `nail … -o out.arrow` result is independently readable. `-f arrow` forces the format, and Arrow input piped on stdin is auto-detected.
